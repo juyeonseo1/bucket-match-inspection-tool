@@ -251,6 +251,23 @@
   </div>
 </div>
 
+<!-- 덮어쓰기 확인 모달 -->
+<div id="overwrite-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width: 420px;">
+    <p class="modal-title">덮어쓰기 방식 선택</p>
+    <p style="font-size: 13px; color: #5f5e5a; margin: 0 0 16px;">기존 데이터를 교체합니다. 검수 결과를 어떻게 처리할까요?</p>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <button id="overwrite-with-reset" style="text-align: left; padding: 10px 14px; color: #791F1F; border-color: rgba(121,31,31,0.3);">
+        검수 결과도 함께 초기화<br><span style="font-size: 11px; color: #888780; font-weight: 400;">Data 교체 + Results 삭제 (Logs 유지)</span>
+      </button>
+      <button id="overwrite-keep-results" style="text-align: left; padding: 10px 14px;">
+        데이터만 교체 (결과 유지)<br><span style="font-size: 11px; color: #888780; font-weight: 400;">Data 교체, Results / Logs 그대로</span>
+      </button>
+      <button id="overwrite-cancel-btn">취소</button>
+    </div>
+  </div>
+</div>
+
 <!-- 전체 보기 팝업 -->
 <div id="overview-modal" class="overview-overlay">
   <div class="overview-box">
@@ -307,8 +324,18 @@
         <input type="file" id="file-input" accept=".xlsx,.xls,.csv" />
         <label for="file-input">파일 선택</label>
         <span class="file-name" id="file-name">선택된 파일 없음</span>
-        <div style="margin-top: 12px;">
-          <button id="btn-upload" class="primary" disabled>업로드 (이 프로젝트의 기존 데이터 덮어쓰기)</button>
+        <div style="margin-top: 12px; margin-bottom: 8px; display: flex; gap: 20px; align-items: center; font-size: 13px; flex-wrap: wrap;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 500;">
+            <input type="radio" name="upload-mode" value="append" id="upload-mode-append" checked> 추가
+            <span style="font-weight: 400; color: #5f5e5a;">(기존 데이터 뒤에 이어 붙이기)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 500;">
+            <input type="radio" name="upload-mode" value="overwrite" id="upload-mode-overwrite"> 덮어쓰기
+            <span style="font-weight: 400; color: #5f5e5a;">(기존 데이터 전체 교체)</span>
+          </label>
+        </div>
+        <div>
+          <button id="btn-upload" class="primary" disabled>업로드</button>
         </div>
       </div>
       <p id="upload-help" style="font-size:11px; color:#888780; margin-top:8px;"></p>
@@ -367,6 +394,19 @@
 
     <div class="panel">
       <p class="panel-title">검수 결과 통계</p>
+      <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 0.5px solid rgba(0,0,0,0.08);">
+        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="radio" name="stats-date-filter" value="all" checked> 전체 기간</label>
+        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="radio" name="stats-date-filter" value="single"> 날짜 선택</label>
+        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;"><input type="radio" name="stats-date-filter" value="range"> 기간 설정</label>
+        <div id="stats-date-single-wrap" style="display:none;">
+          <input type="date" id="stats-date-single-val" style="height:30px; font-size:13px; padding:0 8px;" />
+        </div>
+        <div id="stats-date-range-wrap" style="display:none; gap: 6px; align-items: center;">
+          <input type="date" id="stats-date-range-start" style="height:30px; font-size:13px; padding:0 8px;" />
+          <span>~</span>
+          <input type="date" id="stats-date-range-end" style="height:30px; font-size:13px; padding:0 8px;" />
+        </div>
+      </div>
       <div class="stats">
         <div class="stat"><div class="stat-label">전체</div><div class="stat-value" id="g-total">0</div></div>
         <div class="stat"><div class="stat-label">검수 완료</div><div class="stat-value" id="g-done">0</div></div>
@@ -855,44 +895,78 @@
     document.getElementById('btn-upload').disabled = false;
   });
 
+  let uploadConfirmCallback = null;
+
+  function showOverwriteModal(cb) {
+    uploadConfirmCallback = cb;
+    document.getElementById('overwrite-modal').classList.add('visible');
+  }
+
+  document.getElementById('overwrite-with-reset').addEventListener('click', () => {
+    document.getElementById('overwrite-modal').classList.remove('visible');
+    if (uploadConfirmCallback) { const cb = uploadConfirmCallback; uploadConfirmCallback = null; cb(false, true); }
+  });
+  document.getElementById('overwrite-keep-results').addEventListener('click', () => {
+    document.getElementById('overwrite-modal').classList.remove('visible');
+    if (uploadConfirmCallback) { const cb = uploadConfirmCallback; uploadConfirmCallback = null; cb(false, false); }
+  });
+  document.getElementById('overwrite-cancel-btn').addEventListener('click', () => {
+    document.getElementById('overwrite-modal').classList.remove('visible');
+    uploadConfirmCallback = null;
+    const btn = document.getElementById('btn-upload');
+    btn.disabled = false; btn.textContent = '업로드';
+  });
+
   document.getElementById('btn-upload').addEventListener('click', async () => {
     if (!pendingFile || !currentProjectId) return;
     const proj = projects.find(p => p.id === currentProjectId);
     if (!proj) return;
-    if (!confirm('이 프로젝트의 기존 데이터를 덮어씁니다. 계속할까요?')) return;
-    const btn = document.getElementById('btn-upload');
-    btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 업로드 중...';
-    try {
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        try {
-          const data = new Uint8Array(ev.target.result);
-          const wb = XLSX.read(data, { type: 'array' });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-          let merges = [];
-          if (proj.mode === 'free' && ws['!merges']) {
-            ws['!merges'].forEach(m => {
-              const cellAddr = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c });
-              const cell = ws[cellAddr];
-              merges.push({ row: m.s.r, startCol: m.s.c, endCol: m.e.c, value: cell ? String(cell.v || '') : '' });
-            });
-          }
-          const res = await call('uploadData', { password: adminPwCache, projectId: currentProjectId, rows, merges });
-          if (res.ok) {
-            toast(`업로드 완료: ${res.count}행`);
-            pendingFile = null;
-            document.getElementById('file-input').value = '';
-            document.getElementById('file-name').textContent = '선택된 파일 없음';
-            await loadProject();
-          } else toast(res.error, true);
-        } catch(e) { toast('업로드 실패: ' + e.message, true); }
-        finally { btn.disabled = false; btn.textContent = '업로드 (이 프로젝트의 기존 데이터 덮어쓰기)'; }
-      };
-      reader.readAsArrayBuffer(pendingFile);
-    } catch(e) {
-      toast('파일 읽기 실패: ' + e.message, true);
-      btn.disabled = false; btn.textContent = '업로드 (이 프로젝트의 기존 데이터 덮어쓰기)';
+    const isAppendMode = document.getElementById('upload-mode-append').checked;
+
+    async function executeUpload(appendMode, resetResults) {
+      const btn = document.getElementById('btn-upload');
+      btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 업로드 중...';
+      try {
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try {
+            const data = new Uint8Array(ev.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+            let merges = [];
+            if (proj.mode === 'free' && ws['!merges']) {
+              ws['!merges'].forEach(m => {
+                const cellAddr = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c });
+                const cell = ws[cellAddr];
+                merges.push({ row: m.s.r, startCol: m.s.c, endCol: m.e.c, value: cell ? String(cell.v || '') : '' });
+              });
+            }
+            const payload = { password: adminPwCache, projectId: currentProjectId, rows, merges, appendMode };
+            if (!appendMode && resetResults) payload.resetResults = true;
+            const res = await call('uploadData', payload);
+            if (res.ok) {
+              toast(`업로드 완료: ${res.count}행`);
+              pendingFile = null;
+              document.getElementById('file-input').value = '';
+              document.getElementById('file-name').textContent = '선택된 파일 없음';
+              await loadProject();
+            } else toast(res.error, true);
+          } catch(e) { toast('업로드 실패: ' + e.message, true); }
+          finally { btn.disabled = false; btn.textContent = '업로드'; }
+        };
+        reader.readAsArrayBuffer(pendingFile);
+      } catch(e) {
+        toast('파일 읽기 실패: ' + e.message, true);
+        btn.disabled = false; btn.textContent = '업로드';
+      }
+    }
+
+    if (isAppendMode) {
+      if (!confirm(`기존 ${RAW_DATA.length}행에 새 데이터를 추가합니다. 계속할까요?`)) return;
+      await executeUpload(true, false);
+    } else {
+      showOverwriteModal(executeUpload);
     }
   });
 
@@ -1083,7 +1157,23 @@
     });
   }
 
+  function getStatsDateFilter() {
+    const checked = document.querySelector('input[name="stats-date-filter"]:checked');
+    const filterMode = checked ? checked.value : 'all';
+    if (filterMode === 'single') {
+      const d = document.getElementById('stats-date-single-val').value;
+      return d ? { startDate: d, endDate: d } : null;
+    }
+    if (filterMode === 'range') {
+      const s = document.getElementById('stats-date-range-start').value;
+      const e = document.getElementById('stats-date-range-end').value;
+      return (s || e) ? { startDate: s || null, endDate: e || null } : null;
+    }
+    return null;
+  }
+
   function renderStats() {
+    const dateFilter = getStatsDateFilter();
     const total = RAW_DATA.length;
     let doneCount = 0, matchCount = 0, mismatchCount = 0;
     const reasonCounts = {};
@@ -1091,6 +1181,11 @@
     for (let i = 0; i < total; i++) {
       const r = results[getKey(i)];
       if (r && r.decision) {
+        if (dateFilter) {
+          const d = r.timestamp ? r.timestamp.slice(0, 10) : '';
+          if (dateFilter.startDate && d < dateFilter.startDate) continue;
+          if (dateFilter.endDate && d > dateFilter.endDate) continue;
+        }
         doneCount++;
         if (r.decision === '일치') matchCount++;
         else if (r.decision === '불일치') { mismatchCount++; if (r.reason) reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1; }
@@ -1123,7 +1218,10 @@
   async function loadWorkerStats() {
     if (!adminPwCache || !currentProjectId) return;
     try {
-      const res = await call('getWorkerStats', { password: adminPwCache, projectId: currentProjectId });
+      const dateFilter = getStatsDateFilter();
+      const statsPayload = { password: adminPwCache, projectId: currentProjectId };
+      if (dateFilter) { statsPayload.startDate = dateFilter.startDate; statsPayload.endDate = dateFilter.endDate; }
+      const res = await call('getWorkerStats', statsPayload);
       const tbody = document.getElementById('worker-stats-tbody');
       if (!res.ok || !res.stats || res.stats.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#888780; padding:16px;">데이터 없음</td></tr>'; return; }
       tbody.innerHTML = res.stats.map(s => `<tr><td><strong>${escapeHtml(s.worker)}</strong></td><td>${s.total}건<br><span style="font-size:11px;color:#888780;">일치 ${s.match} / 불일치 ${s.mismatch}</span></td><td>${s.matchRate}%</td><td>${s.avgSec > 0 ? s.avgSec + '초' : '-'}</td><td>${s.perHour > 0 ? s.perHour + '건/시' : '-'}</td></tr>`).join('');
@@ -1200,6 +1298,21 @@
     adminUnlocked = false; adminPwCache = '';
     try { localStorage.removeItem('inspection_admin_unlocked'); localStorage.removeItem('inspection_admin_pw'); } catch(e) {}
     switchMode('worker');
+  });
+
+  document.querySelectorAll('input[name="stats-date-filter"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const v = radio.value;
+      document.getElementById('stats-date-single-wrap').style.display = v === 'single' ? 'block' : 'none';
+      const rangeWrap = document.getElementById('stats-date-range-wrap');
+      rangeWrap.style.display = v === 'range' ? 'flex' : 'none';
+      if (mode === 'admin') { renderStats(); loadWorkerStats(); }
+    });
+  });
+  ['stats-date-single-val', 'stats-date-range-start', 'stats-date-range-end'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      if (mode === 'admin') { renderStats(); loadWorkerStats(); }
+    });
   });
 
   function renderWorker() {

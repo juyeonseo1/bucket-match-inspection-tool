@@ -458,35 +458,60 @@ function uploadData(payload) {
   const rows = payload.rows;
   if (!rows || rows.length === 0) return { ok: false, error: '데이터가 비어있습니다' };
 
+  const appendMode = payload.appendMode === true;
+
+  // 덮어쓰기 + Results 초기화 옵션
+  if (!appendMode && payload.resetResults === true) {
+    const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
+    const sheet = projectSs.getSheetByName('Results');
+    sheet.clear();
+    sheet.getRange(1, 1, 1, 8).setValues([['키', '식별값1', '식별값2', '검수결과', '오매핑유형', '메모', '작업자', '작업시간']]);
+    sheet.setFrozenRows(1);
+    // Logs는 유지
+  }
+
   if (proj.mode === 'free') {
-    return uploadDataFree_(proj, rows, payload.merges || []);
+    return uploadDataFree_(proj, rows, payload.merges || [], appendMode);
   } else {
-    return uploadDataStandard_(proj, rows);
+    return uploadDataStandard_(proj, rows, appendMode);
   }
 }
 
-function uploadDataStandard_(proj, rows) {
+function uploadDataStandard_(proj, rows, appendMode) {
   const headers = rows[0].map(String);
   const required = ['상품번호', '상품명', '네이버_URL', 'C_상품번호', 'C_상품명', 'C_URL'];
   const missing = required.filter(c => headers.indexOf(c) === -1);
   if (missing.length > 0) return { ok: false, error: '필수 컬럼이 없습니다: ' + missing.join(', ') };
 
   const colIdx = STANDARD_HEADERS.map(h => headers.indexOf(h));
-  const normalizedRows = [STANDARD_HEADERS.slice()];
+  const newDataRows = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const isEmpty = r.every(c => c === '' || c === null || c === undefined);
     if (isEmpty) continue;
-    normalizedRows.push(colIdx.map(idx => idx >= 0 ? String(r[idx] || '') : ''));
+    newDataRows.push(colIdx.map(idx => idx >= 0 ? String(r[idx] || '') : ''));
   }
 
   const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
   const sheet = projectSs.getSheetByName('Data');
-  sheet.clear();
-  sheet.getRange(1, 1, normalizedRows.length, STANDARD_HEADERS.length).setValues(normalizedRows);
-  sheet.setFrozenRows(1);
 
-  return { ok: true, count: normalizedRows.length - 1 };
+  if (appendMode) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) {
+      const allRows = [STANDARD_HEADERS.slice(), ...newDataRows];
+      sheet.getRange(1, 1, allRows.length, STANDARD_HEADERS.length).setValues(allRows);
+      sheet.setFrozenRows(1);
+    } else if (newDataRows.length > 0) {
+      sheet.getRange(lastRow + 1, 1, newDataRows.length, STANDARD_HEADERS.length).setValues(newDataRows);
+    }
+  } else {
+    const normalizedRows = [STANDARD_HEADERS.slice(), ...newDataRows];
+    sheet.clear();
+    sheet.getRange(1, 1, normalizedRows.length, STANDARD_HEADERS.length).setValues(normalizedRows);
+    sheet.setFrozenRows(1);
+  }
+
+  return { ok: true, count: newDataRows.length };
 }
 
 /**
@@ -498,7 +523,7 @@ function uploadDataStandard_(proj, rows) {
  *
  * 그룹 분리: merges 정보로 좌/우 그룹 자동 추출
  */
-function uploadDataFree_(proj, rows, merges) {
+function uploadDataFree_(proj, rows, merges, appendMode) {
   if (rows.length < 2) return { ok: false, error: '자유 모드는 최소 2행(그룹헤더 + 컬럼헤더)이 필요합니다' };
 
   const groupRow = rows[0].map(v => String(v == null ? '' : v));
@@ -641,6 +666,38 @@ function uploadDataFree_(proj, rows, merges) {
     rightGroup: { name: rightGroup.name || '매칭', columns: rightColsUnique }
   };
 
+  // 데이터 행 파싱 (시트 접근 전)
+  const dataRows = [];
+  for (let i = 2; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const isEmpty = r.every(c => c === '' || c === null || c === undefined);
+    if (isEmpty) continue;
+    const out = [];
+    leftOrigIdx.forEach(idx => out.push(String(r[idx] == null ? '' : r[idx])));
+    rightOrigIdx.forEach(idx => out.push(String(r[idx] == null ? '' : r[idx])));
+    dataRows.push(out);
+  }
+
+  // 추가 모드: 기존 스키마와 컬럼 비교 후 데이터만 append
+  if (appendMode) {
+    const existingSchema = proj.schema;
+    if (existingSchema && existingSchema.leftGroup && existingSchema.leftGroup.columns.length > 0) {
+      const existingCols = [...existingSchema.leftGroup.columns, ...existingSchema.rightGroup.columns];
+      const newCols = [...leftColsUnique, ...rightColsUnique];
+      if (existingCols.join(',') !== newCols.join(',')) {
+        return { ok: false, error: `컬럼 구조가 기존과 다릅니다.\n기존: [${existingCols.join(', ')}]\n신규: [${newCols.join(', ')}]` };
+      }
+      const projectSsA = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
+      const dataSheetA = projectSsA.getSheetByName('Data');
+      const lastRow = dataSheetA.getLastRow();
+      if (dataRows.length > 0) {
+        dataSheetA.getRange(lastRow + 1, 1, dataRows.length, existingCols.length).setValues(dataRows);
+      }
+      return { ok: true, count: dataRows.length, schema: existingSchema };
+    }
+    // 기존 스키마 없으면 덮어쓰기로 처리
+  }
+
   const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
   const dataSheet = projectSs.getSheetByName('Data');
   dataSheet.clear();
@@ -669,16 +726,6 @@ function uploadDataFree_(proj, rows, merges) {
   dataSheet.getRange(2, 1, 1, allCols.length).setFontWeight('bold').setBackground('#F1EFE8');
 
   // 3행~: 데이터
-  const dataRows = [];
-  for (let i = 2; i < rows.length; i++) {
-    const r = rows[i] || [];
-    const isEmpty = r.every(c => c === '' || c === null || c === undefined);
-    if (isEmpty) continue;
-    const out = [];
-    leftOrigIdx.forEach(idx => out.push(String(r[idx] == null ? '' : r[idx])));
-    rightOrigIdx.forEach(idx => out.push(String(r[idx] == null ? '' : r[idx])));
-    dataRows.push(out);
-  }
   if (dataRows.length > 0) {
     dataSheet.getRange(3, 1, dataRows.length, allCols.length).setValues(dataRows);
   }
@@ -870,13 +917,24 @@ function getWorkerStats(payload) {
   if (!verifyAdminPassword(payload.password)) return { ok: false, error: '관리자 인증 실패' };
   const projectId = String(payload.projectId || '');
   if (!projectId) return { ok: false, error: '프로젝트가 선택되지 않았습니다' };
-  return { ok: true, stats: computeWorkerStats_(projectId) };
+  const startDate = payload.startDate || null;
+  const endDate = payload.endDate || null;
+  return { ok: true, stats: computeWorkerStats_(projectId, startDate, endDate) };
 }
 
-function computeWorkerStats_(projectId) {
+function computeWorkerStats_(projectId, startDate, endDate) {
   const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
   const logsSheet = projectSs.getSheetByName('Logs');
   const resultsSheet = projectSs.getSheetByName('Results');
+
+  function inRange(ts) {
+    if (!startDate && !endDate) return true;
+    const d = ts ? String(ts).slice(0, 10) : '';
+    if (!d) return false;
+    if (startDate && d < startDate) return false;
+    if (endDate && d > endDate) return false;
+    return true;
+  }
 
   const lv = logsSheet.getDataRange().getValues();
   const workerLogs = {};
@@ -884,11 +942,13 @@ function computeWorkerStats_(projectId) {
     const lh = lv[0].map(String);
     const lcW = findHeader_(lh, ['작업자']);
     const lcS = findHeader_(lh, ['소요초']);
+    const lcTs = findHeader_(lh, ['타임스탬프']);
     if (lcW >= 0 && lcS >= 0) {
       for (let i = 1; i < lv.length; i++) {
         const w = String(lv[i][lcW] || '');
         const s = parseFloat(lv[i][lcS]) || 0;
         if (!w || s <= 0) continue;
+        if (!inRange(lcTs >= 0 ? lv[i][lcTs] : '')) continue;
         if (!workerLogs[w]) workerLogs[w] = [];
         workerLogs[w].push(s);
       }
@@ -901,11 +961,13 @@ function computeWorkerStats_(projectId) {
     const rh = rv[0].map(String);
     const cD = findHeader_(rh, ['검수결과']);
     const cW = findHeader_(rh, ['작업자']);
+    const cT = findHeader_(rh, ['작업시간']);
     if (cD >= 0 && cW >= 0) {
       for (let i = 1; i < rv.length; i++) {
         const decision = String(rv[i][cD] || '');
         const w = String(rv[i][cW] || '');
         if (!w || !decision) continue;
+        if (!inRange(cT >= 0 ? rv[i][cT] : '')) continue;
         if (!workerCounts[w]) workerCounts[w] = { match: 0, mismatch: 0, total: 0 };
         workerCounts[w].total++;
         if (decision === '일치') workerCounts[w].match++;
