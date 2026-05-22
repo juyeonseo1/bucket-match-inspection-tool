@@ -52,7 +52,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.action === 'download' && e.parameter.projectId && e.parameter.token) {
     return handleDownloadRequest_(e.parameter);
   }
-  return HtmlService.createTemplateFromFile('Index')
+  return HtmlService.createTemplateFromFile('index')
     .evaluate()
     .setTitle('상품 매칭 검수툴')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
