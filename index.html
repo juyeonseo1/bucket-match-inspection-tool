@@ -378,8 +378,11 @@
         <input type="number" id="new-end" placeholder="끝" style="flex:0.7;" min="1" />
         <button id="btn-add-assign" style="flex:0.7;">추가</button>
       </div>
-      <div style="margin-top:12px; display:flex; gap:8px;">
-        <button id="btn-auto-split" style="flex:1;">등록된 작업자에게 균등 분배</button>
+      <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="number" id="auto-split-start" placeholder="시작행" min="1" style="width:80px; height:32px; font-size:13px;" />
+        <span style="font-size:12px; color:#888780;">~</span>
+        <input type="number" id="auto-split-end" placeholder="끝행" min="1" style="width:80px; height:32px; font-size:13px;" />
+        <button id="btn-auto-split" style="flex:1;">균등 분배</button>
         <button id="btn-clear-assign" class="danger">할당 초기화</button>
       </div>
     </div>
@@ -1258,10 +1261,19 @@
     if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
     if (workersRegistry.length === 0) { alert('먼저 작업자를 등록해주세요'); return; }
     if (RAW_DATA.length === 0) { alert('먼저 데이터를 업로드해주세요'); return; }
-    if (!confirm(`등록된 ${workersRegistry.length}명에게 균등 분배합니다.\n(기존 할당은 모두 대체됩니다)`)) return;
-    const total = RAW_DATA.length;
-    const per = Math.ceil(total / workersRegistry.length);
-    assignments = workersRegistry.map((w, i) => ({ worker: w, start: i*per+1, end: Math.min(total, (i+1)*per) }));
+    const startVal = parseInt(document.getElementById('auto-split-start').value) || 1;
+    const endVal = parseInt(document.getElementById('auto-split-end').value) || RAW_DATA.length;
+    if (startVal < 1 || endVal > RAW_DATA.length || startVal > endVal) {
+      alert(`올바른 범위를 입력해주세요. (1 ~ ${RAW_DATA.length})`); return;
+    }
+    if (!confirm(`${startVal}~${endVal}행 (${endVal - startVal + 1}건)을 ${workersRegistry.length}명에게 균등 분배합니다.\n(기존 할당은 모두 대체됩니다)`)) return;
+    const rangeTotal = endVal - startVal + 1;
+    const per = Math.ceil(rangeTotal / workersRegistry.length);
+    assignments = workersRegistry.map((w, i) => ({
+      worker: w,
+      start: startVal + i * per,
+      end: Math.min(endVal, startVal + (i + 1) * per - 1)
+    })).filter(a => a.start <= endVal);
     await call('saveAssignments', { password: adminPwCache, projectId: currentProjectId, assignments });
     renderAdmin();
   });
