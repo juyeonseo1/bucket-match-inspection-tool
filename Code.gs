@@ -1845,10 +1845,12 @@ function updateDataSchema(payload) {
   // proj.rowIdx = 1-based row index in Projects sheet (from getProjectInfo_)
   const settingsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAMES.PROJECTS);
   if (settingsSheet && proj.rowIdx) {
+    const leftCount = (payload.leftCount && Number(payload.leftCount) > 0) ? Number(payload.leftCount) : Math.ceil(newColumns.length / 2);
     const newSchema = {
       mode: 'free',
       singleHeader: true,
-      columns: newColumns
+      columns: newColumns,
+      leftCount: leftCount
     };
     settingsSheet.getRange(proj.rowIdx, 6).setValue(JSON.stringify(newSchema));
     // col 5 = mode 컬럼, free 유지

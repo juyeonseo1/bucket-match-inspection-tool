@@ -301,12 +301,48 @@
     </p>
     <div style="margin-bottom: 10px;">
       <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">컬럼 목록 (순서대로)</label>
-      <textarea id="schema-columns-input" rows="13" style="width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; font-family: monospace;"></textarea>
+      <textarea id="schema-columns-input" rows="11" style="width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; font-family: monospace;"></textarea>
     </div>
-    <p style="font-size: 11px; color: #888780; margin: 0 0 12px;">총 <span id="schema-col-count">0</span>개 컬럼</p>
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+      <p style="font-size: 11px; color: #888780; margin: 0;">총 <span id="schema-col-count">0</span>개 컬럼</p>
+      <span style="font-size: 11px; color: #888780;">|</span>
+      <label style="font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; margin: 0;">
+        왼쪽 카드 컬럼 수:
+        <input type="number" id="schema-left-count" min="1" value="8" style="width: 52px; padding: 3px 6px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;" />
+      </label>
+      <span style="font-size: 11px; color: #888780;">나머지는 오른쪽 카드</span>
+    </div>
     <div class="modal-actions" style="margin-top: 4px; padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.1);">
       <button id="schema-cancel">취소</button>
       <button id="schema-confirm" class="primary">변경 적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- 프로젝트 삭제 확인 모달 -->
+<div id="delete-proj-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width: 460px;">
+    <p class="modal-title">🗑 프로젝트 삭제</p>
+    <p style="font-size: 13px; color: #333; margin: 0 0 6px;">
+      아래 프로젝트의 <strong>모든 데이터가 영구 삭제</strong>됩니다.<br>
+      되돌릴 수 없습니다.
+    </p>
+    <p style="font-size: 14px; font-weight: 600; background: #fdf3f3; border: 1px solid #f5c6c6; border-radius: 6px; padding: 8px 12px; margin: 0 0 14px; color: #791F1F;" id="delete-proj-name-display"></p>
+    <div style="margin-bottom: 10px;">
+      <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">
+        확인을 위해 프로젝트 이름을 정확히 입력하세요
+      </label>
+      <input type="text" id="delete-proj-name-input" placeholder="프로젝트 이름 입력"
+        style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px;" />
+    </div>
+    <div style="margin-bottom: 14px;">
+      <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">관리자 비밀번호</label>
+      <input type="password" id="delete-proj-pw-input" placeholder="비밀번호 입력"
+        style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px;" />
+    </div>
+    <div class="modal-actions" style="padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.1);">
+      <button id="delete-proj-cancel">취소</button>
+      <button id="delete-proj-confirm" class="danger" disabled>삭제</button>
     </div>
   </div>
 </div>
@@ -919,22 +955,11 @@
       });
     });
     grid.querySelectorAll('[data-delete]').forEach(b => {
-      b.addEventListener('click', async (e) => {
+      b.addEventListener('click', (e) => {
         const id = e.target.dataset.delete;
         const proj = projects.find(p => p.id === id);
         if (!proj) return;
-        const typed = prompt(`⚠️ 프로젝트 영구 삭제\n\n'${proj.name}' 프로젝트의 모든 데이터가 삭제됩니다.\n되돌릴 수 없습니다.\n\n계속하려면 프로젝트 이름을 정확히 입력하세요:`);
-        if (typed === null) return;
-        if (typed.trim() !== proj.name) { toast('프로젝트 이름이 일치하지 않습니다. 삭제 취소됨', true); return; }
-        const pw = prompt(`마지막 확인입니다.\n관리자 비밀번호를 입력해주세요:`);
-        if (pw === null) return;
-        if (!pw.trim()) { toast('비밀번호를 입력해주세요', true); return; }
-        const res = await call('deleteProject', { password: pw, projectId: id });
-        if (res.ok) {
-          toast(`'${proj.name}' 삭제 완료`);
-          if (currentProjectId === id) { currentProjectId = ''; try { localStorage.removeItem('inspection_project_id'); } catch(err) {} }
-          await reloadProjectsList(); await loadProject();
-        } else toast(res.error || '삭제 실패', true);
+        openDeleteProjModal(id, proj.name);
       });
     });
   }
@@ -944,6 +969,54 @@
     projects = state.projects || [];
     refreshProjectSelect(); renderProjectsGrid();
   }
+
+  // ── 프로젝트 삭제 모달 ──────────────────────────────────
+  let _deleteProjId = null;
+  let _deleteProjName = null;
+
+  function openDeleteProjModal(id, name) {
+    _deleteProjId = id;
+    _deleteProjName = name;
+    document.getElementById('delete-proj-name-display').textContent = name;
+    document.getElementById('delete-proj-name-input').value = '';
+    document.getElementById('delete-proj-pw-input').value = '';
+    document.getElementById('delete-proj-confirm').disabled = true;
+    document.getElementById('delete-proj-modal').classList.add('visible');
+    setTimeout(() => document.getElementById('delete-proj-name-input').focus(), 100);
+  }
+
+  function checkDeleteProjReady() {
+    const nameOk = document.getElementById('delete-proj-name-input').value === _deleteProjName;
+    const pwOk   = document.getElementById('delete-proj-pw-input').value.trim().length > 0;
+    document.getElementById('delete-proj-confirm').disabled = !(nameOk && pwOk);
+  }
+  document.getElementById('delete-proj-name-input').addEventListener('input', checkDeleteProjReady);
+  document.getElementById('delete-proj-pw-input').addEventListener('input', checkDeleteProjReady);
+
+  document.getElementById('delete-proj-cancel').addEventListener('click', () => {
+    document.getElementById('delete-proj-modal').classList.remove('visible');
+  });
+
+  document.getElementById('delete-proj-confirm').addEventListener('click', async () => {
+    const pw   = document.getElementById('delete-proj-pw-input').value.trim();
+    const name = _deleteProjName;
+    const id   = _deleteProjId;
+    document.getElementById('delete-proj-modal').classList.remove('visible');
+    const btn = document.getElementById('delete-proj-confirm');
+    btn.disabled = true;
+    try {
+      const res = await call('deleteProject', { password: pw, projectId: id });
+      if (res.ok) {
+        toast(`'${name}' 삭제 완료`);
+        if (currentProjectId === id) {
+          currentProjectId = '';
+          try { localStorage.removeItem('inspection_project_id'); } catch(err) {}
+        }
+        await reloadProjectsList();
+        await loadProject();
+      } else toast(res.error || '삭제 실패', true);
+    } catch(e) { toast('오류: ' + e.message, true); }
+  });
 
   document.getElementById('file-input').addEventListener('change', (e) => {
     const f = e.target.files[0];
@@ -1543,7 +1616,6 @@
   // ── 스키마 변경 버튼 ──────────────────────────────────
   document.getElementById('btn-update-schema').addEventListener('click', () => {
     if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
-    // 기본값: 11개 컬럼
     const DEFAULT_COLUMNS = [
       '우선순위', '처리주체', '고유키 id', '상품명', '오늘의집_url',
       '브랜드명', '오늘의집_옵션1', '오늘의집_옵션2',
@@ -1551,6 +1623,9 @@
     ];
     const textarea = document.getElementById('schema-columns-input');
     textarea.value = DEFAULT_COLUMNS.join('\n');
+    // 기존 스키마에 leftCount 있으면 복원
+    document.getElementById('schema-left-count').value =
+      (currentSchema && currentSchema.leftCount) ? currentSchema.leftCount : 8;
     updateSchemaColCount();
     document.getElementById('schema-modal').classList.add('visible');
   });
@@ -1571,15 +1646,16 @@
     const newColumns = textarea.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
     if (newColumns.length === 0) { toast('컬럼을 최소 1개 이상 입력해주세요', true); return; }
 
-    const proj = projectList.find(p => p.id === currentProjectId);
-    if (!confirm(`'${proj ? proj.name : currentProjectId}' 프로젝트의 Data 시트 헤더를 ${newColumns.length}개 컬럼으로 변경합니다.\n기존 데이터는 같은 이름의 컬럼으로 이전됩니다.\n\n계속하시겠습니까?`)) return;
+    const leftCount = parseInt(document.getElementById('schema-left-count').value) || Math.ceil(newColumns.length / 2);
+    const proj = projects.find(p => p.id === currentProjectId);
+    if (!confirm(`'${proj ? proj.name : currentProjectId}' 프로젝트의 Data 시트 헤더를 ${newColumns.length}개 컬럼으로 변경합니다.\n왼쪽 카드: ${leftCount}개 / 오른쪽 카드: ${newColumns.length - leftCount}개\n기존 데이터는 같은 이름의 컬럼으로 이전됩니다.\n\n계속하시겠습니까?`)) return;
 
     document.getElementById('schema-modal').classList.remove('visible');
     const btn = document.getElementById('btn-update-schema');
     const orig = btn.textContent;
     btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 적용 중...';
     try {
-      const r = await call('updateDataSchema', { password: adminPwCache, projectId: currentProjectId, newColumns });
+      const r = await call('updateDataSchema', { password: adminPwCache, projectId: currentProjectId, newColumns, leftCount });
       if (r.ok) {
         toast(`스키마 변경 완료 — ${r.migratedRows}행 이전됨`);
         if (r.sheetUrl) window.open(r.sheetUrl, '_blank', 'noopener');
@@ -1677,11 +1753,10 @@
     if (!currentSchema) return;
     let leftCols, rightCols, leftLabel, rightLabel;
     if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
-      // singleHeader: 컬럼을 절반으로 나눠 좌/우 표시
-      const half = Math.ceil(currentSchema.columns.length / 2);
+      const half = currentSchema.leftCount || Math.ceil(currentSchema.columns.length / 2);
       leftCols  = currentSchema.columns.slice(0, half);
       rightCols = currentSchema.columns.slice(half);
-      leftLabel  = '정보';
+      leftLabel  = '오늘의집';
       rightLabel = '매칭';
     } else {
       leftCols  = currentSchema.leftGroup  ? currentSchema.leftGroup.columns  : [];
@@ -1720,7 +1795,7 @@
     if (!r) return null;
     let cols;
     if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
-      const half = Math.ceil(currentSchema.columns.length / 2);
+      const half = currentSchema.leftCount || Math.ceil(currentSchema.columns.length / 2);
       cols = side === 'left' ? currentSchema.columns.slice(0, half) : currentSchema.columns.slice(half);
     } else {
       cols = side === 'left' ? (currentSchema.leftGroup ? currentSchema.leftGroup.columns : []) : (currentSchema.rightGroup ? currentSchema.rightGroup.columns : []);
@@ -1738,7 +1813,7 @@
     function pickIdent(cols) { for (let c of cols) { if (isUrlColumn(c)) continue; const v = r[c]; if (v && v.trim()) return v; } return ''; }
     let leftCols, rightCols;
     if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
-      const half = Math.ceil(currentSchema.columns.length / 2);
+      const half = currentSchema.leftCount || Math.ceil(currentSchema.columns.length / 2);
       leftCols  = currentSchema.columns.slice(0, half);
       rightCols = currentSchema.columns.slice(half);
     } else {
@@ -1886,7 +1961,7 @@
       if (currentSchema) {
         let lc, rc;
         if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
-          const half = Math.ceil(currentSchema.columns.length / 2);
+          const half = currentSchema.leftCount || Math.ceil(currentSchema.columns.length / 2);
           lc = currentSchema.columns.slice(0, half);
           rc = currentSchema.columns.slice(half);
         } else {
