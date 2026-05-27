@@ -312,6 +312,11 @@
       </label>
       <span style="font-size: 11px; color: #888780;">나머지는 오른쪽 카드</span>
     </div>
+    <div style="margin-bottom: 14px;">
+      <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">관리자 비밀번호</label>
+      <input type="password" id="schema-pw-input" placeholder="비밀번호 입력"
+        style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px;" />
+    </div>
     <div class="modal-actions" style="margin-top: 4px; padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.1);">
       <button id="schema-cancel">취소</button>
       <button id="schema-confirm" class="primary">변경 적용</button>
@@ -1626,8 +1631,10 @@
     // 기존 스키마에 leftCount 있으면 복원
     document.getElementById('schema-left-count').value =
       (currentSchema && currentSchema.leftCount) ? currentSchema.leftCount : 8;
+    document.getElementById('schema-pw-input').value = '';
     updateSchemaColCount();
     document.getElementById('schema-modal').classList.add('visible');
+    setTimeout(() => document.getElementById('schema-pw-input').focus(), 100);
   });
 
   function updateSchemaColCount() {
@@ -1647,6 +1654,8 @@
     if (newColumns.length === 0) { toast('컬럼을 최소 1개 이상 입력해주세요', true); return; }
 
     const leftCount = parseInt(document.getElementById('schema-left-count').value) || Math.ceil(newColumns.length / 2);
+    const schemaPw = document.getElementById('schema-pw-input').value.trim();
+    if (!schemaPw) { toast('비밀번호를 입력해주세요', true); return; }
     const proj = projects.find(p => p.id === currentProjectId);
     if (!confirm(`'${proj ? proj.name : currentProjectId}' 프로젝트의 Data 시트 헤더를 ${newColumns.length}개 컬럼으로 변경합니다.\n왼쪽 카드: ${leftCount}개 / 오른쪽 카드: ${newColumns.length - leftCount}개\n기존 데이터는 같은 이름의 컬럼으로 이전됩니다.\n\n계속하시겠습니까?`)) return;
 
@@ -1655,7 +1664,7 @@
     const orig = btn.textContent;
     btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 적용 중...';
     try {
-      const r = await call('updateDataSchema', { password: adminPwCache, projectId: currentProjectId, newColumns, leftCount });
+      const r = await call('updateDataSchema', { password: schemaPw, projectId: currentProjectId, newColumns, leftCount });
       if (r.ok) {
         toast(`스키마 변경 완료 — ${r.migratedRows}행 이전됨`);
         if (r.sheetUrl) window.open(r.sheetUrl, '_blank', 'noopener');
