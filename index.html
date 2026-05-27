@@ -268,6 +268,28 @@
   </div>
 </div>
 
+<!-- 컬럼 매핑 확인 모달 -->
+<div id="col-mapping-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width: 560px; max-height: 85vh; display: flex; flex-direction: column;">
+    <p class="modal-title">컬럼 매핑 확인</p>
+    <p style="font-size: 12px; color: #5f5e5a; margin: 0 0 14px; line-height: 1.6;">
+      파일의 컬럼명이 기존 스키마와 다릅니다.<br>
+      각 기존 컬럼에 파일의 어떤 컬럼을 매핑할지 확인하고, 필요하면 직접 바꿔주세요.
+    </p>
+    <div style="display: grid; grid-template-columns: 1fr 24px 1fr; gap: 8px; font-size: 11px; color: #888780; padding: 0 2px; margin-bottom: 6px;">
+      <div>기존 스키마 컬럼</div><div></div><div>파일 컬럼 (직접 선택 가능)</div>
+    </div>
+    <div id="col-mapping-rows" style="overflow-y: auto; flex: 1; padding-right: 4px; max-height: 50vh;"></div>
+    <p style="font-size: 11px; color: #888780; margin: 10px 0 0;">
+      ✓ = 완전 일치 &nbsp;★ = 유사 매칭 (확인 필요) &nbsp;⚠ = 매칭 없음 (직접 선택)
+    </p>
+    <div class="modal-actions" style="margin-top: 14px; padding-top: 14px; border-top: 0.5px solid rgba(0,0,0,0.1);">
+      <button id="col-mapping-cancel">취소</button>
+      <button id="col-mapping-confirm" class="primary">이 매핑으로 업로드</button>
+    </div>
+  </div>
+</div>
+
 <!-- 전체 보기 팝업 -->
 <div id="overview-modal" class="overview-overlay">
   <div class="overview-box">
@@ -902,6 +924,93 @@
     document.getElementById('btn-upload').disabled = false;
   });
 
+  // ── 컬럼명 정규화: 대소문자·공백·하이픈·언더스코어 무시 ──
+  function normalizeColName(name) {
+    return String(name || '').trim().toLowerCase().replace(/[\s\-_\.]+/g, '');
+  }
+
+  // 스키마 컬럼 vs 파일 컬럼 → 제안 매핑 생성 (exact → fuzzy → null 순)
+  function proposeMappings(schemaCols, fileCols) {
+    return schemaCols.map(sc => {
+      if (fileCols.includes(sc)) return sc;
+      const norm = normalizeColName(sc);
+      return fileCols.find(fc => normalizeColName(fc) === norm) || null;
+    });
+  }
+
+  // 파일 읽기 → { rows, merges } Promise
+  function readFileParsed(file, isFree) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = new Uint8Array(ev.target.result);
+          const wb = XLSX.read(data, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          let merges = [];
+          if (isFree && ws['!merges']) {
+            ws['!merges'].forEach(m => {
+              const cellAddr = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c });
+              const cell = ws[cellAddr];
+              merges.push({ row: m.s.r, startCol: m.s.c, endCol: m.e.c, value: cell ? String(cell.v || '') : '' });
+            });
+          }
+          resolve({ rows, merges });
+        } catch(e) { reject(e); }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  // 컬럼 매핑 모달 → 사용자 확인 시 mapping 배열 resolve, 취소 시 null
+  function showColMappingModal(schemaCols, fileCols, proposed) {
+    return new Promise((resolve) => {
+      const rowsEl = document.getElementById('col-mapping-rows');
+      rowsEl.innerHTML = schemaCols.map((sc, i) => {
+        const p = proposed[i];
+        const isExact = p === sc;
+        const isFuzzy = p && !isExact;
+        const noMatch = !p;
+        const badge = isExact
+          ? `<span style="font-size:10px;color:#1D9E75;">✓ 일치</span>`
+          : isFuzzy
+            ? `<span style="font-size:10px;color:#C87A00;">★ 유사 매칭</span>`
+            : `<span style="font-size:10px;color:#E24B4A;">⚠ 매칭 없음</span>`;
+        const opts = [
+          `<option value="__skip__">(무시 / 빈값)</option>`,
+          ...fileCols.map(fc =>
+            `<option value="${escapeHtml(fc)}"${fc === p ? ' selected' : ''}>${escapeHtml(fc)}</option>`)
+        ].join('');
+        return `
+          <div style="display:grid;grid-template-columns:1fr 24px 1fr;gap:8px;align-items:center;margin-bottom:10px;">
+            <div>
+              <div style="font-size:12px;padding:5px 8px;background:#f1efe8;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(sc)}">${escapeHtml(sc)}</div>
+              <div style="text-align:center;margin-top:2px;">${badge}</div>
+            </div>
+            <div style="text-align:center;color:#888780;">→</div>
+            <select data-idx="${i}" style="height:32px;font-size:12px;${noMatch ? 'border-color:rgba(226,75,74,0.5);' : ''}">${opts}</select>
+          </div>`;
+      }).join('');
+
+      document.getElementById('col-mapping-modal').classList.add('visible');
+
+      document.getElementById('col-mapping-confirm').onclick = () => {
+        const mapping = schemaCols.map((_, i) => {
+          const sel = rowsEl.querySelector(`select[data-idx="${i}"]`);
+          return sel ? sel.value : '__skip__';
+        });
+        document.getElementById('col-mapping-modal').classList.remove('visible');
+        resolve(mapping);
+      };
+      document.getElementById('col-mapping-cancel').onclick = () => {
+        document.getElementById('col-mapping-modal').classList.remove('visible');
+        resolve(null);
+      };
+    });
+  }
+
   let uploadConfirmCallback = null;
 
   function showOverwriteModal(cb) {
@@ -930,50 +1039,64 @@
     if (!proj) return;
     const isAppendMode = document.getElementById('upload-mode-append').checked;
 
-    async function executeUpload(appendMode, resetResults) {
+    async function doUpload(appendMode, resetResults) {
       const btn = document.getElementById('btn-upload');
-      btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 업로드 중...';
+      btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 파일 읽는 중...';
       try {
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          try {
-            const data = new Uint8Array(ev.target.result);
-            const wb = XLSX.read(data, { type: 'array' });
-            const ws = wb.Sheets[wb.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-            let merges = [];
-            if (proj.mode === 'free' && ws['!merges']) {
-              ws['!merges'].forEach(m => {
-                const cellAddr = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c });
-                const cell = ws[cellAddr];
-                merges.push({ row: m.s.r, startCol: m.s.c, endCol: m.e.c, value: cell ? String(cell.v || '') : '' });
-              });
-            }
-            const payload = { password: adminPwCache, projectId: currentProjectId, rows, merges, appendMode };
-            if (!appendMode && resetResults) payload.resetResults = true;
-            const res = await call('uploadData', payload);
-            if (res.ok) {
-              toast(`업로드 완료: ${res.count}행`);
-              pendingFile = null;
-              document.getElementById('file-input').value = '';
-              document.getElementById('file-name').textContent = '선택된 파일 없음';
-              await loadProject();
-            } else toast(res.error, true);
-          } catch(e) { toast('업로드 실패: ' + e.message, true); }
-          finally { btn.disabled = false; btn.textContent = '업로드'; }
-        };
-        reader.readAsArrayBuffer(pendingFile);
+        const { rows, merges } = await readFileParsed(pendingFile, proj.mode === 'free');
+
+        // 자유 모드 + 추가 모드 + 기존 스키마 존재 → 컬럼 매핑 확인
+        let columnMapping = null;
+        if (proj.mode === 'free' && appendMode &&
+            currentSchema && currentSchema.leftGroup && currentSchema.leftGroup.columns.length > 0) {
+          const schemaCols = [
+            ...currentSchema.leftGroup.columns,
+            ...(currentSchema.rightGroup ? currentSchema.rightGroup.columns : [])
+          ];
+          const fileHeaderRow = (rows[1] || []).map(v => String(v == null ? '' : v));
+          const fileCols = fileHeaderRow.filter(h => h.trim());
+          const exactMatch = schemaCols.length === fileCols.length &&
+                             schemaCols.every((c, i) => c === fileCols[i]);
+
+          if (!exactMatch) {
+            // 컬럼명이 하나라도 다르면 매핑 모달 표시
+            btn.disabled = false; btn.textContent = '업로드';
+            const proposed = proposeMappings(schemaCols, fileCols);
+            const confirmed = await showColMappingModal(schemaCols, fileCols, proposed);
+            if (!confirmed) return; // 사용자가 취소
+            columnMapping = confirmed;
+            btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 업로드 중...';
+          } else {
+            btn.innerHTML = '<span class="loading"></span> 업로드 중...';
+          }
+        } else {
+          btn.innerHTML = '<span class="loading"></span> 업로드 중...';
+        }
+
+        const payload = { password: adminPwCache, projectId: currentProjectId, rows, merges, appendMode };
+        if (!appendMode && resetResults) payload.resetResults = true;
+        if (columnMapping) payload.columnMapping = columnMapping;
+
+        const res = await call('uploadData', payload);
+        if (res.ok) {
+          toast(`업로드 완료: ${res.count}행`);
+          pendingFile = null;
+          document.getElementById('file-input').value = '';
+          document.getElementById('file-name').textContent = '선택된 파일 없음';
+          await loadProject();
+        } else toast(res.error, true);
       } catch(e) {
-        toast('파일 읽기 실패: ' + e.message, true);
+        toast('업로드 실패: ' + e.message, true);
+      } finally {
         btn.disabled = false; btn.textContent = '업로드';
       }
     }
 
     if (isAppendMode) {
       if (!confirm(`기존 ${RAW_DATA.length}행에 새 데이터를 추가합니다. 계속할까요?`)) return;
-      await executeUpload(true, false);
+      await doUpload(true, false);
     } else {
-      showOverwriteModal(executeUpload);
+      showOverwriteModal(doUpload);
     }
   });
 

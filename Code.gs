@@ -683,6 +683,33 @@ function uploadDataFree_(proj, rows, merges, appendMode) {
     const existingSchema = proj.schema;
     if (existingSchema && existingSchema.leftGroup && existingSchema.leftGroup.columns.length > 0) {
       const existingCols = [...existingSchema.leftGroup.columns, ...existingSchema.rightGroup.columns];
+
+      // ── 사용자가 확인한 컬럼 매핑이 있는 경우 ──────────────
+      // payload.columnMapping[i] = 기존 스키마 i번 컬럼에 매핑할 파일 컬럼명
+      // '__skip__' 또는 빈 값이면 빈 문자열로 채움
+      const colMapping = payload.columnMapping;
+      if (colMapping && Array.isArray(colMapping) && colMapping.length === existingCols.length) {
+        const mappedRows = [];
+        for (let i = 2; i < rows.length; i++) {
+          const r = rows[i] || [];
+          if (r.every(c => c === '' || c === null || c === undefined)) continue;
+          const out = colMapping.map(fileColName => {
+            if (!fileColName || fileColName === '__skip__') return '';
+            const idx = headerRow.indexOf(fileColName);
+            return idx >= 0 ? String(r[idx] == null ? '' : r[idx]) : '';
+          });
+          mappedRows.push(out);
+        }
+        const projectSsM = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
+        const dataSheetM = projectSsM.getSheetByName('Data');
+        const lastRowM = dataSheetM.getLastRow();
+        if (mappedRows.length > 0) {
+          dataSheetM.getRange(lastRowM + 1, 1, mappedRows.length, existingCols.length).setValues(mappedRows);
+        }
+        return { ok: true, count: mappedRows.length, schema: existingSchema };
+      }
+
+      // ── 매핑 없음: 컬럼이 완전히 일치해야 함 ──────────────
       const newCols = [...leftColsUnique, ...rightColsUnique];
       if (existingCols.join(',') !== newCols.join(',')) {
         return { ok: false, error: `컬럼 구조가 기존과 다릅니다.\n기존: [${existingCols.join(', ')}]\n신규: [${newCols.join(', ')}]` };
