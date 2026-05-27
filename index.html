@@ -290,6 +290,27 @@
   </div>
 </div>
 
+<!-- 스키마 변경 모달 -->
+<div id="schema-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width: 560px; max-height: 90vh; display: flex; flex-direction: column;">
+    <p class="modal-title">🔧 Data 시트 스키마 변경</p>
+    <p style="font-size: 12px; color: #888780; margin: 0 0 12px;">
+      아래에 새 컬럼명을 <strong>한 줄에 하나씩</strong> 입력하세요.<br>
+      기존 Data 시트의 데이터는 같은 이름의 컬럼으로 자동 이전됩니다.<br>
+      <span style="color: #d32f2f;">⚠ 헤더가 단일 행으로 변경되며 기존 그룹 행은 삭제됩니다.</span>
+    </p>
+    <div style="margin-bottom: 10px;">
+      <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">컬럼 목록 (순서대로)</label>
+      <textarea id="schema-columns-input" rows="13" style="width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; font-family: monospace;"></textarea>
+    </div>
+    <p style="font-size: 11px; color: #888780; margin: 0 0 12px;">총 <span id="schema-col-count">0</span>개 컬럼</p>
+    <div class="modal-actions" style="margin-top: 4px; padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.1);">
+      <button id="schema-cancel">취소</button>
+      <button id="schema-confirm" class="primary">변경 적용</button>
+    </div>
+  </div>
+</div>
+
 <!-- 전체 보기 팝업 -->
 <div id="overview-modal" class="overview-overlay">
   <div class="overview-box">
@@ -465,6 +486,10 @@
     <div style="display:flex; gap:8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center;">
       <button id="btn-update-stats-sheet" style="flex:1;">📊 통계 시트 업데이트</button>
       <span style="font-size: 11px; color: #888780;">프로젝트 Google Sheet의 '통계' 탭을 지금 바로 업데이트합니다 (처리주체별 정확도 포함)</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center;">
+      <button id="btn-update-schema" style="flex:1;">🔧 Data 시트 스키마 변경</button>
+      <span style="font-size: 11px; color: #888780;">Data 탭의 컬럼 구조를 변경합니다 (기존 데이터 보존, 1행 헤더로 전환)</span>
     </div>
     <div style="display:flex; gap:8px; margin-bottom: 1rem;">
       <button id="btn-download" class="primary" style="flex:1;">엑셀 다운로드 (현재 프로젝트 + 통계)</button>
@@ -1065,13 +1090,16 @@
 
         // 자유 모드 + 추가 모드 + 기존 스키마 존재 → 컬럼 매핑 확인
         let columnMapping = null;
-        let fileHeaderRowIdx = 1; // 기본값: 자유 모드 원본 포맷 (1행=그룹헤더, 2행=컬럼명)
-        if (proj.mode === 'free' && appendMode &&
-            currentSchema && currentSchema.leftGroup && currentSchema.leftGroup.columns.length > 0) {
-          const schemaCols = [
-            ...currentSchema.leftGroup.columns,
-            ...(currentSchema.rightGroup ? currentSchema.rightGroup.columns : [])
-          ];
+        const isSingleHdr = !!(currentSchema && currentSchema.singleHeader);
+        // singleHeader 기본값 = 0(파일 1행이 컬럼명), 기존 free 모드 = 1(1행=그룹헤더, 2행=컬럼명)
+        let fileHeaderRowIdx = isSingleHdr ? 0 : 1;
+        const schemaColsFromSchema = currentSchema && currentSchema.singleHeader && Array.isArray(currentSchema.columns) && currentSchema.columns.length > 0
+          ? currentSchema.columns
+          : (currentSchema && currentSchema.leftGroup && currentSchema.leftGroup.columns.length > 0
+            ? [...currentSchema.leftGroup.columns, ...(currentSchema.rightGroup ? currentSchema.rightGroup.columns : [])]
+            : null);
+        if (proj.mode === 'free' && appendMode && schemaColsFromSchema) {
+          const schemaCols = schemaColsFromSchema;
           // 파일 포맷 자동 감지: 1행=컬럼명(단순 포맷) vs 2행=컬럼명(그룹헤더 포함 포맷)
           fileHeaderRowIdx = detectFileHeaderRowIdx(rows, schemaCols);
           const fileHeaderRow = (rows[fileHeaderRowIdx] || []).map(v => String(v == null ? '' : v));
@@ -1512,6 +1540,56 @@
     finally { btn.disabled = false; btn.textContent = orig; }
   });
 
+  // ── 스키마 변경 버튼 ──────────────────────────────────
+  document.getElementById('btn-update-schema').addEventListener('click', () => {
+    if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
+    // 기본값: 11개 컬럼
+    const DEFAULT_COLUMNS = [
+      '우선순위', '처리주체', '고유키 id', '상품명', '오늘의집_url',
+      '브랜드명', '오늘의집_옵션1', '오늘의집_옵션2',
+      '매칭 셀러', '매칭 상품명', '매칭 url'
+    ];
+    const textarea = document.getElementById('schema-columns-input');
+    textarea.value = DEFAULT_COLUMNS.join('\n');
+    updateSchemaColCount();
+    document.getElementById('schema-modal').classList.add('visible');
+  });
+
+  function updateSchemaColCount() {
+    const lines = document.getElementById('schema-columns-input').value
+      .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    document.getElementById('schema-col-count').textContent = lines.length;
+  }
+  document.getElementById('schema-columns-input').addEventListener('input', updateSchemaColCount);
+
+  document.getElementById('schema-cancel').addEventListener('click', () => {
+    document.getElementById('schema-modal').classList.remove('visible');
+  });
+
+  document.getElementById('schema-confirm').addEventListener('click', async () => {
+    const textarea = document.getElementById('schema-columns-input');
+    const newColumns = textarea.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    if (newColumns.length === 0) { toast('컬럼을 최소 1개 이상 입력해주세요', true); return; }
+
+    const proj = projectList.find(p => p.id === currentProjectId);
+    if (!confirm(`'${proj ? proj.name : currentProjectId}' 프로젝트의 Data 시트 헤더를 ${newColumns.length}개 컬럼으로 변경합니다.\n기존 데이터는 같은 이름의 컬럼으로 이전됩니다.\n\n계속하시겠습니까?`)) return;
+
+    document.getElementById('schema-modal').classList.remove('visible');
+    const btn = document.getElementById('btn-update-schema');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 적용 중...';
+    try {
+      const r = await call('updateDataSchema', { password: adminPwCache, projectId: currentProjectId, newColumns });
+      if (r.ok) {
+        toast(`스키마 변경 완료 — ${r.migratedRows}행 이전됨`);
+        if (r.sheetUrl) window.open(r.sheetUrl, '_blank', 'noopener');
+        // 현재 프로젝트 상태 새로고침
+        await loadProject();
+      } else toast(r.error || '실패', true);
+    } catch(e) { toast('오류: ' + e.message, true); }
+    finally { btn.disabled = false; btn.textContent = orig; }
+  });
+
   document.getElementById('btn-download').addEventListener('click', async () => {
     if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
     const btn = document.getElementById('btn-download');
@@ -1597,11 +1675,23 @@
 
   function renderCards(rowData) {
     if (!currentSchema) return;
-    const leftCols = currentSchema.leftGroup ? currentSchema.leftGroup.columns : [];
-    const rightCols = currentSchema.rightGroup ? currentSchema.rightGroup.columns : [];
-    document.getElementById('left-label').textContent = currentSchema.leftGroup ? currentSchema.leftGroup.name : '왼쪽';
-    document.getElementById('right-label').textContent = currentSchema.rightGroup ? currentSchema.rightGroup.name : '오른쪽';
-    document.getElementById('left-fields').innerHTML = renderFields(rowData, leftCols, 3);
+    let leftCols, rightCols, leftLabel, rightLabel;
+    if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
+      // singleHeader: 컬럼을 절반으로 나눠 좌/우 표시
+      const half = Math.ceil(currentSchema.columns.length / 2);
+      leftCols  = currentSchema.columns.slice(0, half);
+      rightCols = currentSchema.columns.slice(half);
+      leftLabel  = '정보';
+      rightLabel = '매칭';
+    } else {
+      leftCols  = currentSchema.leftGroup  ? currentSchema.leftGroup.columns  : [];
+      rightCols = currentSchema.rightGroup ? currentSchema.rightGroup.columns : [];
+      leftLabel  = currentSchema.leftGroup  ? currentSchema.leftGroup.name  : '왼쪽';
+      rightLabel = currentSchema.rightGroup ? currentSchema.rightGroup.name : '오른쪽';
+    }
+    document.getElementById('left-label').textContent  = leftLabel;
+    document.getElementById('right-label').textContent = rightLabel;
+    document.getElementById('left-fields').innerHTML  = renderFields(rowData, leftCols,  3);
     document.getElementById('right-fields').innerHTML = renderFields(rowData, rightCols, 4);
   }
 
@@ -1628,7 +1718,13 @@
     if (myRange.length === 0) return null;
     const r = RAW_DATA[myRange[curIdx]];
     if (!r) return null;
-    const cols = side === 'left' ? (currentSchema.leftGroup ? currentSchema.leftGroup.columns : []) : (currentSchema.rightGroup ? currentSchema.rightGroup.columns : []);
+    let cols;
+    if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
+      const half = Math.ceil(currentSchema.columns.length / 2);
+      cols = side === 'left' ? currentSchema.columns.slice(0, half) : currentSchema.columns.slice(half);
+    } else {
+      cols = side === 'left' ? (currentSchema.leftGroup ? currentSchema.leftGroup.columns : []) : (currentSchema.rightGroup ? currentSchema.rightGroup.columns : []);
+    }
     for (let c of cols) { if (isUrlColumn(c)) { const v = r[c]; if (v && v.trim()) return v; } }
     return null;
   }
@@ -1640,7 +1736,16 @@
     const r = RAW_DATA[myRange[curIdx]];
     if (!r) return { ident1: '', ident2: '' };
     function pickIdent(cols) { for (let c of cols) { if (isUrlColumn(c)) continue; const v = r[c]; if (v && v.trim()) return v; } return ''; }
-    return { ident1: pickIdent(currentSchema.leftGroup ? currentSchema.leftGroup.columns : []), ident2: pickIdent(currentSchema.rightGroup ? currentSchema.rightGroup.columns : []) };
+    let leftCols, rightCols;
+    if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
+      const half = Math.ceil(currentSchema.columns.length / 2);
+      leftCols  = currentSchema.columns.slice(0, half);
+      rightCols = currentSchema.columns.slice(half);
+    } else {
+      leftCols  = currentSchema.leftGroup  ? currentSchema.leftGroup.columns  : [];
+      rightCols = currentSchema.rightGroup ? currentSchema.rightGroup.columns : [];
+    }
+    return { ident1: pickIdent(leftCols), ident2: pickIdent(rightCols) };
   }
 
   async function setDecision(decision) {
@@ -1779,8 +1884,15 @@
       const r = RAW_DATA[i]; const res = results[getKey(i)] || {}; const isCurrent = i === currentActualIdx;
       let leftIdent = '', rightIdent = '';
       if (currentSchema) {
-        const lc = currentSchema.leftGroup ? currentSchema.leftGroup.columns : [];
-        const rc = currentSchema.rightGroup ? currentSchema.rightGroup.columns : [];
+        let lc, rc;
+        if (currentSchema.singleHeader && Array.isArray(currentSchema.columns)) {
+          const half = Math.ceil(currentSchema.columns.length / 2);
+          lc = currentSchema.columns.slice(0, half);
+          rc = currentSchema.columns.slice(half);
+        } else {
+          lc = currentSchema.leftGroup  ? currentSchema.leftGroup.columns  : [];
+          rc = currentSchema.rightGroup ? currentSchema.rightGroup.columns : [];
+        }
         for (let c of lc) { if (isUrlColumn(c)) continue; if (r[c] && r[c].trim()) { leftIdent = r[c]; break; } }
         for (let c of rc) { if (isUrlColumn(c)) continue; if (r[c] && r[c].trim()) { rightIdent = r[c]; break; } }
       }

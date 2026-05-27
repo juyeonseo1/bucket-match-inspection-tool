@@ -277,10 +277,14 @@ function getProjectState(payload) {
   let dataHeaders = [];
 
   if (proj.mode === 'free') {
-    // 자유 모드: 1행=그룹, 2행=헤더, 3행~=데이터
-    if (dataValues.length >= 2) {
-      dataHeaders = dataValues[1].map(String);
-      for (let i = 2; i < dataValues.length; i++) {
+    // 자유 모드: singleHeader=true → 1행=헤더, 2행~=데이터
+    //            singleHeader=false → 1행=그룹, 2행=헤더, 3행~=데이터
+    const singleHdr = isSingleHeader_(proj);
+    const hdrIdx   = singleHdr ? 0 : 1;
+    const dataStart = singleHdr ? 1 : 2;
+    if (dataValues.length >= hdrIdx + 1) {
+      dataHeaders = dataValues[hdrIdx].map(String);
+      for (let i = dataStart; i < dataValues.length; i++) {
         const row = {};
         let hasContent = false;
         dataHeaders.forEach((h, j) => {
@@ -378,6 +382,11 @@ function findHeader_(headers, candidates) {
     if (candidates.indexOf(headers[i]) >= 0) return i;
   }
   return -1;
+}
+
+// singleHeader 모드 여부: schema.singleHeader === true 이면 Data 시트가 1행 헤더
+function isSingleHeader_(proj) {
+  return !!(proj && proj.schema && proj.schema.singleHeader);
 }
 
 // ============ 프로젝트 관리 ============
@@ -524,6 +533,36 @@ function uploadDataStandard_(proj, rows, appendMode) {
  * 그룹 분리: merges 정보로 좌/우 그룹 자동 추출
  */
 function uploadDataFree_(proj, rows, merges, appendMode, payload) {
+  // singleHeader 프로젝트에서의 추가 모드는 별도 처리 (그룹 파싱 불필요)
+  if (isSingleHeader_(proj) && appendMode) {
+    const existingSchema = proj.schema;
+    const existingCols = Array.isArray(existingSchema && existingSchema.columns) ? existingSchema.columns : [];
+    if (existingCols.length === 0) return { ok: false, error: '프로젝트 스키마에 컬럼 정보가 없습니다' };
+    const fileHeaderRowIdx = (payload && payload.fileHeaderRowIdx != null) ? Number(payload.fileHeaderRowIdx) : 0;
+    const fileHdr = (rows[fileHeaderRowIdx] || []).map(v => String(v == null ? '' : v));
+    const colMapping = payload && payload.columnMapping;
+    const projectSsA = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
+    const dataSheetA = projectSsA.getSheetByName('Data');
+    const lastRow = dataSheetA.getLastRow();
+    const appendedRows = [];
+    const startRow = fileHeaderRowIdx + 1;
+    for (let i = startRow; i < rows.length; i++) {
+      const r = rows[i] || [];
+      if (r.every(c => c === '' || c === null || c === undefined)) continue;
+      const out = existingCols.map((col, ci) => {
+        const fileColName = colMapping ? colMapping[ci] : col;
+        if (!fileColName || fileColName === '__skip__') return '';
+        const idx = fileHdr.indexOf(fileColName);
+        return idx >= 0 ? String(r[idx] == null ? '' : r[idx]) : '';
+      });
+      appendedRows.push(out);
+    }
+    if (appendedRows.length > 0) {
+      dataSheetA.getRange(lastRow + 1, 1, appendedRows.length, existingCols.length).setValues(appendedRows);
+    }
+    return { ok: true, count: appendedRows.length, schema: existingSchema };
+  }
+
   if (rows.length < 2) return { ok: false, error: '자유 모드는 최소 2행(그룹헤더 + 컬럼헤더)이 필요합니다' };
 
   const groupRow = rows[0].map(v => String(v == null ? '' : v));
@@ -681,8 +720,14 @@ function uploadDataFree_(proj, rows, merges, appendMode, payload) {
   // 추가 모드: 기존 스키마와 컬럼 비교 후 데이터만 append
   if (appendMode) {
     const existingSchema = proj.schema;
-    if (existingSchema && existingSchema.leftGroup && existingSchema.leftGroup.columns.length > 0) {
-      const existingCols = [...existingSchema.leftGroup.columns, ...existingSchema.rightGroup.columns];
+    // singleHeader 모드는 schema.columns 배열, 기존 free 모드는 leftGroup/rightGroup
+    const existingColsFromSchema = existingSchema && existingSchema.singleHeader && Array.isArray(existingSchema.columns) && existingSchema.columns.length > 0
+      ? existingSchema.columns
+      : (existingSchema && existingSchema.leftGroup && existingSchema.leftGroup.columns && existingSchema.leftGroup.columns.length > 0
+        ? [...existingSchema.leftGroup.columns, ...(existingSchema.rightGroup ? existingSchema.rightGroup.columns : [])]
+        : null);
+    if (existingColsFromSchema) {
+      const existingCols = existingColsFromSchema;
       // fileHeaderRowIdx: 0 = 단일 헤더 포맷(1행=컬럼명, 2행~=데이터)
       //                   1 = 이중 헤더 포맷(1행=그룹헤더, 2행=컬럼명, 3행~=데이터)
       const fileHeaderRowIdx = (payload && payload.fileHeaderRowIdx != null) ? Number(payload.fileHeaderRowIdx) : 1;
@@ -975,7 +1020,7 @@ function computeWorkerStats_(projectId, startDate, endDate) {
   if (hasDateFilter) {
     const dv = dataSheet.getDataRange().getValues();
     const isFree = proj && proj.mode === 'free';
-    const headerCount = isFree ? 2 : 1;
+    const headerCount = isFree && !isSingleHeader_(proj) ? 2 : 1;
     if (dv.length > headerCount) {
       const dataHeaders = dv[headerCount - 1].map(String);
       const cdIdx = dataHeaders.findIndex(
@@ -1094,7 +1139,7 @@ function updateStatsSheet(payload) {
   // ── 데이터 로드 ────────────────────────────────────────
   const dv = dataSheet.getDataRange().getValues();
   let dataHeaders = [], dataRows = [];
-  if (proj.mode === 'free' && dv.length >= 2) {
+  if (proj.mode === 'free' && !isSingleHeader_(proj) && dv.length >= 2) {
     dataHeaders = dv[1].map(String);
     dataRows = dv.slice(2).filter(r => r.some(c => c !== '' && c !== null && c !== undefined));
   } else if (dv.length > 0) {
@@ -1403,7 +1448,7 @@ function createTempExportSpreadsheet_(projectId) {
   const dv = dataSheet.getDataRange().getValues();
   let dataHeaders = [];
   let dataRows = [];
-  if (proj.mode === 'free' && dv.length >= 2) {
+  if (proj.mode === 'free' && !isSingleHeader_(proj) && dv.length >= 2) {
     dataHeaders = dv[1].map(String);
     dataRows = dv.slice(2).filter(r => r.some(c => c !== '' && c !== null && c !== undefined));
   } else if (dv.length > 0) {
@@ -1591,7 +1636,7 @@ function deleteUnworkedRows(payload) {
   // ── 1. Data 읽기 ──────────────────────────────────────────
   const dv = dataSheet.getDataRange().getValues();
   const isFree      = (proj.mode === 'free');
-  const headerCount = isFree ? 2 : 1;
+  const headerCount = isFree && !isSingleHeader_(proj) ? 2 : 1;
   if (dv.length <= headerCount) return { ok: true, deleted: 0 };
 
   const headerRows = dv.slice(0, headerCount);
@@ -1632,7 +1677,7 @@ function deleteUnworkedRows(payload) {
   dataSheet.clear();
   dataSheet.clearFormats();
 
-  if (isFree) {
+  if (isFree && !isSingleHeader_(proj)) {
     const schema   = proj.schema || {};
     const leftLen  = (schema.leftGroup  && schema.leftGroup.columns)  ? schema.leftGroup.columns.length  : 0;
     const rightLen = (schema.rightGroup && schema.rightGroup.columns) ? schema.rightGroup.columns.length : 0;
@@ -1654,8 +1699,9 @@ function deleteUnworkedRows(payload) {
     }
     dataSheet.setFrozenRows(2);
   } else {
-    // 표준 모드
+    // 표준 모드 또는 singleHeader free 모드
     dataSheet.getRange(1, 1, 1, totalCols).setValues([headerRows[0]]);
+    dataSheet.getRange(1, 1, 1, totalCols).setFontWeight('bold').setBackground('#F1EFE8');
     dataSheet.setFrozenRows(1);
     if (newDataRows.length > 0) {
       dataSheet.getRange(2, 1, newDataRows.length, totalCols).setValues(newDataRows);
@@ -1732,6 +1778,92 @@ function deleteUnworkedRows(payload) {
 
   SpreadsheetApp.flush();
   return { ok: true, deleted: deletedCount, remaining: newDataRows.length };
+}
+
+// ============ 스키마 변경 ============
+/**
+ * Data 시트의 헤더를 사용자가 지정한 컬럼 목록으로 교체한다.
+ * - 기존 데이터는 유지 (새 컬럼에 매핑 가능한 값만 보존)
+ * - Data 시트를 singleHeader 모드로 전환 (1행 헤더, 병합 없음)
+ * payload: { projectId, newColumns: string[] }
+ */
+function updateDataSchema(payload) {
+  if (!verifyAdminPassword(payload && payload.password)) return { ok: false, error: '관리자 인증 실패' };
+  const projectId = payload && payload.projectId;
+  if (!projectId) return { ok: false, error: 'projectId 없음' };
+
+  const newColumns = payload.newColumns;
+  if (!Array.isArray(newColumns) || newColumns.length === 0) {
+    return { ok: false, error: 'newColumns 없음' };
+  }
+
+  const proj = getProjectInfo_(projectId);
+  if (!proj) return { ok: false, error: '프로젝트를 찾을 수 없음' };
+
+  const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
+  const dataSheet  = projectSs.getSheetByName('Data');
+  if (!dataSheet) return { ok: false, error: 'Data 시트 없음' };
+
+  // ── 기존 데이터 읽기 ────────────────────────────────────
+  const dv = dataSheet.getDataRange().getValues();
+  const wasSingleHdr = isSingleHeader_(proj);
+  const oldHdrIdx   = (proj.mode === 'free' && !wasSingleHdr) ? 1 : 0;
+  const oldDataStart = oldHdrIdx + 1;
+
+  let oldHeaders = [];
+  let oldRows = [];
+  if (dv.length > oldHdrIdx) {
+    oldHeaders = dv[oldHdrIdx].map(String);
+    oldRows = dv.slice(oldDataStart).filter(r => r.some(c => c !== '' && c !== null && c !== undefined));
+  }
+
+  // ── 새 헤더에 맞춰 데이터 재배열 ──────────────────────
+  const newData = oldRows.map(row => {
+    return newColumns.map(col => {
+      const oldIdx = oldHeaders.indexOf(col);
+      return oldIdx >= 0 ? row[oldIdx] : '';
+    });
+  });
+
+  // ── Data 시트 재작성 ────────────────────────────────────
+  dataSheet.clear();
+  dataSheet.clearFormats();
+
+  const totalCols = newColumns.length;
+
+  // 1행: 새 컬럼 헤더 (singleHeader)
+  dataSheet.getRange(1, 1, 1, totalCols).setValues([newColumns]);
+  dataSheet.getRange(1, 1, 1, totalCols).setFontWeight('bold').setBackground('#F1EFE8');
+  dataSheet.setFrozenRows(1);
+
+  // 2행~: 기존 데이터
+  if (newData.length > 0) {
+    dataSheet.getRange(2, 1, newData.length, totalCols).setValues(newData);
+  }
+
+  // ── Projects 시트의 schemaJson 업데이트 ─────────────────
+  // proj.rowIdx = 1-based row index in Projects sheet (from getProjectInfo_)
+  const settingsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAMES.PROJECTS);
+  if (settingsSheet && proj.rowIdx) {
+    const newSchema = {
+      mode: 'free',
+      singleHeader: true,
+      columns: newColumns
+    };
+    settingsSheet.getRange(proj.rowIdx, 6).setValue(JSON.stringify(newSchema));
+    // col 5 = mode 컬럼, free 유지
+    settingsSheet.getRange(proj.rowIdx, 5).setValue('free');
+  }
+
+  // proj.schema 를 인메모리 캐시 없이 Projects 시트에만 반영하면 충분
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    newColumns: newColumns,
+    migratedRows: newData.length,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/' + projectSs.getId()
+  };
 }
 
 // ============ 진단/유틸 함수 ============
