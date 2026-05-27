@@ -471,7 +471,7 @@ function uploadData(payload) {
   }
 
   if (proj.mode === 'free') {
-    return uploadDataFree_(proj, rows, payload.merges || [], appendMode);
+    return uploadDataFree_(proj, rows, payload.merges || [], appendMode, payload);
   } else {
     return uploadDataStandard_(proj, rows, appendMode);
   }
@@ -523,7 +523,7 @@ function uploadDataStandard_(proj, rows, appendMode) {
  *
  * 그룹 분리: merges 정보로 좌/우 그룹 자동 추출
  */
-function uploadDataFree_(proj, rows, merges, appendMode) {
+function uploadDataFree_(proj, rows, merges, appendMode, payload) {
   if (rows.length < 2) return { ok: false, error: '자유 모드는 최소 2행(그룹헤더 + 컬럼헤더)이 필요합니다' };
 
   const groupRow = rows[0].map(v => String(v == null ? '' : v));
@@ -683,19 +683,21 @@ function uploadDataFree_(proj, rows, merges, appendMode) {
     const existingSchema = proj.schema;
     if (existingSchema && existingSchema.leftGroup && existingSchema.leftGroup.columns.length > 0) {
       const existingCols = [...existingSchema.leftGroup.columns, ...existingSchema.rightGroup.columns];
+      // fileHeaderRowIdx: 0 = 단일 헤더 포맷(1행=컬럼명, 2행~=데이터)
+      //                   1 = 이중 헤더 포맷(1행=그룹헤더, 2행=컬럼명, 3행~=데이터)
+      const fileHeaderRowIdx = (payload && payload.fileHeaderRowIdx != null) ? Number(payload.fileHeaderRowIdx) : 1;
+      const fileHdr = (rows[fileHeaderRowIdx] || []).map(v => String(v == null ? '' : v));
 
       // ── 사용자가 확인한 컬럼 매핑이 있는 경우 ──────────────
-      // payload.columnMapping[i] = 기존 스키마 i번 컬럼에 매핑할 파일 컬럼명
-      // '__skip__' 또는 빈 값이면 빈 문자열로 채움
-      const colMapping = payload.columnMapping;
+      const colMapping = payload && payload.columnMapping;
       if (colMapping && Array.isArray(colMapping) && colMapping.length === existingCols.length) {
         const mappedRows = [];
-        for (let i = 2; i < rows.length; i++) {
+        for (let i = fileHeaderRowIdx + 1; i < rows.length; i++) {
           const r = rows[i] || [];
           if (r.every(c => c === '' || c === null || c === undefined)) continue;
           const out = colMapping.map(fileColName => {
             if (!fileColName || fileColName === '__skip__') return '';
-            const idx = headerRow.indexOf(fileColName);
+            const idx = fileHdr.indexOf(fileColName);
             return idx >= 0 ? String(r[idx] == null ? '' : r[idx]) : '';
           });
           mappedRows.push(out);
@@ -709,18 +711,28 @@ function uploadDataFree_(proj, rows, merges, appendMode) {
         return { ok: true, count: mappedRows.length, schema: existingSchema };
       }
 
-      // ── 매핑 없음: 컬럼이 완전히 일치해야 함 ──────────────
-      const newCols = [...leftColsUnique, ...rightColsUnique];
-      if (existingCols.join(',') !== newCols.join(',')) {
-        return { ok: false, error: `컬럼 구조가 기존과 다릅니다.\n기존: [${existingCols.join(', ')}]\n신규: [${newCols.join(', ')}]` };
+      // ── 매핑 없음: 파일 헤더가 기존 스키마와 완전히 일치해야 함 ──────────────
+      const fileCols = fileHdr.filter(h => h && h.trim());
+      if (existingCols.join(',') !== fileCols.join(',')) {
+        return { ok: false, error: `컬럼 구조가 기존과 다릅니다.\n기존: [${existingCols.join(', ')}]\n신규: [${fileCols.join(', ')}]` };
       }
       const projectSsA = SpreadsheetApp.openById(getProjectSpreadsheetId_(proj.id));
       const dataSheetA = projectSsA.getSheetByName('Data');
       const lastRow = dataSheetA.getLastRow();
-      if (dataRows.length > 0) {
-        dataSheetA.getRange(lastRow + 1, 1, dataRows.length, existingCols.length).setValues(dataRows);
+      const appendedRows = [];
+      for (let i = fileHeaderRowIdx + 1; i < rows.length; i++) {
+        const r = rows[i] || [];
+        if (r.every(c => c === '' || c === null || c === undefined)) continue;
+        const out = existingCols.map(col => {
+          const idx = fileHdr.indexOf(col);
+          return idx >= 0 ? String(r[idx] == null ? '' : r[idx]) : '';
+        });
+        appendedRows.push(out);
       }
-      return { ok: true, count: dataRows.length, schema: existingSchema };
+      if (appendedRows.length > 0) {
+        dataSheetA.getRange(lastRow + 1, 1, appendedRows.length, existingCols.length).setValues(appendedRows);
+      }
+      return { ok: true, count: appendedRows.length, schema: existingSchema };
     }
     // 기존 스키마 없으면 덮어쓰기로 처리
   }

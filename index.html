@@ -929,6 +929,20 @@
     return String(name || '').trim().toLowerCase().replace(/[\s\-_\.]+/g, '');
   }
 
+  // Append 모드에서 파일의 헤더 행 위치를 자동 감지
+  // 0 반환: 1행=컬럼명 포맷 (그룹헤더 없는 단순 포맷)
+  // 1 반환: 2행=컬럼명 포맷 (1행=그룹헤더인 자유 모드 원본 포맷)
+  function detectFileHeaderRowIdx(rows, schemaCols) {
+    function matchScore(rowIdx) {
+      const r = (rows[rowIdx] || []).map(v => String(v == null ? '' : v)).filter(h => h.trim());
+      if (r.length === 0) return 0;
+      return schemaCols.filter(sc =>
+        r.some(fc => normalizeColName(fc) === normalizeColName(sc))
+      ).length;
+    }
+    return matchScore(0) >= matchScore(1) ? 0 : 1;
+  }
+
   // 스키마 컬럼 vs 파일 컬럼 → 제안 매핑 생성 (exact → fuzzy → null 순)
   function proposeMappings(schemaCols, fileCols) {
     return schemaCols.map(sc => {
@@ -1047,13 +1061,16 @@
 
         // 자유 모드 + 추가 모드 + 기존 스키마 존재 → 컬럼 매핑 확인
         let columnMapping = null;
+        let fileHeaderRowIdx = 1; // 기본값: 자유 모드 원본 포맷 (1행=그룹헤더, 2행=컬럼명)
         if (proj.mode === 'free' && appendMode &&
             currentSchema && currentSchema.leftGroup && currentSchema.leftGroup.columns.length > 0) {
           const schemaCols = [
             ...currentSchema.leftGroup.columns,
             ...(currentSchema.rightGroup ? currentSchema.rightGroup.columns : [])
           ];
-          const fileHeaderRow = (rows[1] || []).map(v => String(v == null ? '' : v));
+          // 파일 포맷 자동 감지: 1행=컬럼명(단순 포맷) vs 2행=컬럼명(그룹헤더 포함 포맷)
+          fileHeaderRowIdx = detectFileHeaderRowIdx(rows, schemaCols);
+          const fileHeaderRow = (rows[fileHeaderRowIdx] || []).map(v => String(v == null ? '' : v));
           const fileCols = fileHeaderRow.filter(h => h.trim());
           const exactMatch = schemaCols.length === fileCols.length &&
                              schemaCols.every((c, i) => c === fileCols[i]);
@@ -1076,6 +1093,7 @@
         const payload = { password: adminPwCache, projectId: currentProjectId, rows, merges, appendMode };
         if (!appendMode && resetResults) payload.resetResults = true;
         if (columnMapping) payload.columnMapping = columnMapping;
+        payload.fileHeaderRowIdx = fileHeaderRowIdx;
 
         const res = await call('uploadData', payload);
         if (res.ok) {
