@@ -339,6 +339,10 @@
         </div>
       </div>
       <p id="upload-help" style="font-size:11px; color:#888780; margin-top:8px;"></p>
+      <div style="margin-top: 12px; padding-top: 12px; border-top: 0.5px solid rgba(0,0,0,0.1); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <button id="btn-delete-unworked" class="danger small">🗑 미작업 행 삭제</button>
+        <span style="font-size: 11px; color: #888780;">검수 완료 행만 남기고 미작업 행을 제거합니다. Results / Logs / Assignments 의 키 번호가 자동으로 재정렬됩니다.</span>
+      </div>
     </div>
 
     <div class="panel">
@@ -1175,20 +1179,31 @@
     return null;
   }
 
+  // RAW_DATA 한 행에서 "Collected date" 컬럼 값을 꺼냄 (대소문자·공백 무시)
+  function getCollectedDate(rowData) {
+    if (!rowData) return '';
+    const key = Object.keys(rowData).find(
+      k => k.trim().toLowerCase().replace(/\s+/g, '') === 'collecteddate'
+    );
+    return key ? String(rowData[key] || '').slice(0, 10) : '';
+  }
+
   function renderStats() {
     const dateFilter = getStatsDateFilter();
-    const total = RAW_DATA.length;
-    let doneCount = 0, matchCount = 0, mismatchCount = 0;
+    let total = 0, doneCount = 0, matchCount = 0, mismatchCount = 0;
     const reasonCounts = {};
     REASONS.forEach(r => reasonCounts[r.name] = 0);
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < RAW_DATA.length; i++) {
+      // Collected date 기준 날짜 필터
+      if (dateFilter) {
+        const cd = getCollectedDate(RAW_DATA[i]);
+        if (!cd) continue; // Collected date 없는 행은 날짜 필터 시 제외
+        if (dateFilter.startDate && cd < dateFilter.startDate) continue;
+        if (dateFilter.endDate && cd > dateFilter.endDate) continue;
+      }
+      total++; // 날짜 필터 통과한 행만 전체 카운트
       const r = results[getKey(i)];
       if (r && r.decision) {
-        if (dateFilter) {
-          const d = r.timestamp ? r.timestamp.slice(0, 10) : '';
-          if (dateFilter.startDate && d < dateFilter.startDate) continue;
-          if (dateFilter.endDate && d > dateFilter.endDate) continue;
-        }
         doneCount++;
         if (r.decision === '일치') matchCount++;
         else if (r.decision === '불일치') { mismatchCount++; if (r.reason) reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1; }
@@ -1283,6 +1298,50 @@
     assignments = [];
     await call('saveAssignments', { password: adminPwCache, projectId: currentProjectId, assignments });
     renderAdmin();
+  });
+
+  document.getElementById('btn-delete-unworked').addEventListener('click', async () => {
+    if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
+
+    // 클라이언트 측에서 미작업 행 수 먼저 계산 (로컬 데이터 기준)
+    const unworkedCount = RAW_DATA.filter((_, i) => !isRowDone(i)).length;
+    const workedCount   = RAW_DATA.length - unworkedCount;
+
+    if (unworkedCount === 0) {
+      toast('삭제할 미작업 행이 없습니다 (모두 완료됨)'); return;
+    }
+
+    const proj = projects.find(p => p.id === currentProjectId);
+    const projName = proj ? proj.name : '';
+
+    if (!confirm(
+      `[${projName}] 미작업 행 삭제\n\n` +
+      `• 전체: ${RAW_DATA.length}행\n` +
+      `• 완료(보존): ${workedCount}행\n` +
+      `• 미작업(삭제): ${unworkedCount}행\n\n` +
+      `삭제 후 행 번호가 재정렬됩니다.\n` +
+      `이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?`
+    )) return;
+
+    const btn = document.getElementById('btn-delete-unworked');
+    btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 처리 중...';
+    try {
+      const r = await call('deleteUnworkedRows', { password: adminPwCache, projectId: currentProjectId });
+      if (r.ok) {
+        if (r.deleted === 0) {
+          toast('삭제할 미작업 행이 없습니다');
+        } else {
+          toast(`미작업 ${r.deleted}행 삭제 완료 · 남은 행: ${r.remaining}행`);
+          await loadProject(); // 전체 데이터 새로고침
+        }
+      } else {
+        toast(r.error || '삭제 실패', true);
+      }
+    } catch(e) {
+      toast('오류: ' + e.message, true);
+    } finally {
+      btn.disabled = false; btn.textContent = '🗑 미작업 행 삭제';
+    }
   });
 
   document.getElementById('btn-reset-results').addEventListener('click', async () => {

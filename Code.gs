@@ -923,51 +923,81 @@ function getWorkerStats(payload) {
 }
 
 function computeWorkerStats_(projectId, startDate, endDate) {
+  const proj = getProjectInfo_(projectId);
   const projectSs = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
-  const logsSheet = projectSs.getSheetByName('Logs');
+  const logsSheet    = projectSs.getSheetByName('Logs');
   const resultsSheet = projectSs.getSheetByName('Results');
+  const dataSheet    = projectSs.getSheetByName('Data');
 
-  function inRange(ts) {
+  // ── Data 시트에서 key → Collected date 맵 생성 ──────────
+  // "Collected date" 컬럼을 대소문자/공백 무시하고 탐색
+  const keyToCollectedDate = {};
+  const hasDateFilter = !!(startDate || endDate);
+  if (hasDateFilter) {
+    const dv = dataSheet.getDataRange().getValues();
+    const isFree = proj && proj.mode === 'free';
+    const headerCount = isFree ? 2 : 1;
+    if (dv.length > headerCount) {
+      const dataHeaders = dv[headerCount - 1].map(String);
+      const cdIdx = dataHeaders.findIndex(
+        h => h.trim().toLowerCase().replace(/\s+/g, '') === 'collecteddate'
+      );
+      if (cdIdx >= 0) {
+        for (let i = headerCount; i < dv.length; i++) {
+          const key = String(i - headerCount + 1); // 1-based
+          const val = dv[i][cdIdx];
+          keyToCollectedDate[key] = val ? String(val).slice(0, 10) : '';
+        }
+      }
+    }
+  }
+
+  // key 기준으로 Collected date 범위 체크
+  function inRange(key) {
     if (!startDate && !endDate) return true;
-    const d = ts ? String(ts).slice(0, 10) : '';
+    const d = keyToCollectedDate[String(key)] || '';
     if (!d) return false;
     if (startDate && d < startDate) return false;
     if (endDate && d > endDate) return false;
     return true;
   }
 
+  // ── Logs: 소요시간 집계 ──────────────────────────────────
   const lv = logsSheet.getDataRange().getValues();
   const workerLogs = {};
   if (lv.length > 0) {
     const lh = lv[0].map(String);
-    const lcW = findHeader_(lh, ['작업자']);
-    const lcS = findHeader_(lh, ['소요초']);
-    const lcTs = findHeader_(lh, ['타임스탬프']);
+    const lcW   = findHeader_(lh, ['작업자']);
+    const lcS   = findHeader_(lh, ['소요초']);
+    const lcKey = findHeader_(lh, ['키']);
     if (lcW >= 0 && lcS >= 0) {
       for (let i = 1; i < lv.length; i++) {
-        const w = String(lv[i][lcW] || '');
-        const s = parseFloat(lv[i][lcS]) || 0;
+        const w   = String(lv[i][lcW] || '');
+        const s   = parseFloat(lv[i][lcS]) || 0;
+        const key = lcKey >= 0 ? String(lv[i][lcKey] || '') : '';
         if (!w || s <= 0) continue;
-        if (!inRange(lcTs >= 0 ? lv[i][lcTs] : '')) continue;
+        if (!inRange(key)) continue;
         if (!workerLogs[w]) workerLogs[w] = [];
         workerLogs[w].push(s);
       }
     }
   }
 
+  // ── Results: 일치/불일치 집계 ────────────────────────────
   const rv = resultsSheet.getDataRange().getValues();
   const workerCounts = {};
   if (rv.length > 0) {
-    const rh = rv[0].map(String);
-    const cD = findHeader_(rh, ['검수결과']);
-    const cW = findHeader_(rh, ['작업자']);
-    const cT = findHeader_(rh, ['작업시간']);
+    const rh   = rv[0].map(String);
+    const cD   = findHeader_(rh, ['검수결과']);
+    const cW   = findHeader_(rh, ['작업자']);
+    const cKey = findHeader_(rh, ['키']);
     if (cD >= 0 && cW >= 0) {
       for (let i = 1; i < rv.length; i++) {
         const decision = String(rv[i][cD] || '');
-        const w = String(rv[i][cW] || '');
+        const w        = String(rv[i][cW] || '');
+        const key      = cKey >= 0 ? String(rv[i][cKey] || '') : '';
         if (!w || !decision) continue;
-        if (!inRange(cT >= 0 ? rv[i][cT] : '')) continue;
+        if (!inRange(key)) continue;
         if (!workerCounts[w]) workerCounts[w] = { match: 0, mismatch: 0, total: 0 };
         workerCounts[w].total++;
         if (decision === '일치') workerCounts[w].match++;
@@ -1220,6 +1250,179 @@ function createTempExportSpreadsheet_(projectId) {
 
   SpreadsheetApp.flush();
   return tempSs.getId();
+}
+
+// ============ 미작업 행 삭제 ============
+/**
+ * 검수 결과(decision)가 없는 미작업 행을 Data 시트에서 제거하고,
+ * Results / Logs / Assignments 의 키(행번호)를 새 순서로 재매핑한다.
+ *
+ * 핵심 알고리즘:
+ *   1. 완료된 행의 oldKey 집합 수집
+ *   2. 완료 행만 남긴 newDataRows 구성 + oldKey→newKey 매핑 테이블 생성
+ *   3. Data 시트 재작성 (자유 모드면 그룹헤더 병합 복원)
+ *   4. Results / Logs 의 '키' 컬럼을 매핑 테이블로 일괄 치환
+ *   5. Assignments 의 start/end 를 해당 범위 내 살아남은 newKey 의 min/max 로 갱신
+ *      (범위 내 완료 행이 없으면 그 할당은 제거)
+ */
+function deleteUnworkedRows(payload) {
+  if (!verifyAdminPassword(payload.password)) return { ok: false, error: '관리자 인증 실패' };
+  const projectId = String(payload.projectId || '');
+  if (!projectId) return { ok: false, error: '프로젝트가 선택되지 않았습니다' };
+
+  const proj = getProjectInfo_(projectId);
+  if (!proj) return { ok: false, error: '프로젝트를 찾을 수 없습니다' };
+
+  const projectSs   = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
+  const dataSheet    = projectSs.getSheetByName('Data');
+  const resultsSheet = projectSs.getSheetByName('Results');
+  const logsSheet    = projectSs.getSheetByName('Logs');
+  const assignSheet  = projectSs.getSheetByName('Assignments');
+
+  // ── 1. Data 읽기 ──────────────────────────────────────────
+  const dv = dataSheet.getDataRange().getValues();
+  const isFree      = (proj.mode === 'free');
+  const headerCount = isFree ? 2 : 1;
+  if (dv.length <= headerCount) return { ok: true, deleted: 0 };
+
+  const headerRows = dv.slice(0, headerCount);
+  const dataRows   = dv.slice(headerCount);
+  const totalCols  = (headerRows[headerCount - 1] || []).length || 1;
+
+  // ── 2. 완료 키 수집 ──────────────────────────────────────
+  const rv = resultsSheet.getDataRange().getValues();
+  const rh = rv.length > 0 ? rv[0].map(String) : [];
+  const cKey      = findHeader_(rh, ['키']);
+  const cDecision = findHeader_(rh, ['검수결과']);
+
+  const doneKeys = new Set();
+  for (let i = 1; i < rv.length; i++) {
+    const k = cKey >= 0 ? String(rv[i][cKey] || '') : '';
+    const d = cDecision >= 0 ? String(rv[i][cDecision] || '') : '';
+    if (k && d) doneKeys.add(k);
+  }
+
+  // ── 3. oldKey→newKey 매핑 + 살아남은 데이터 ─────────────
+  const oldToNew   = {};   // { "3": "2", "5": "3", ... }
+  const newDataRows = [];
+  let newKeyCounter = 1;
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const oldKey = String(i + 1);
+    if (doneKeys.has(oldKey)) {
+      oldToNew[oldKey] = String(newKeyCounter++);
+      newDataRows.push(dataRows[i]);
+    }
+    // 미작업 행은 그냥 건너뜀 (삭제)
+  }
+
+  const deletedCount = dataRows.length - newDataRows.length;
+  if (deletedCount === 0) return { ok: true, deleted: 0 };
+
+  // ── 4. Data 시트 재작성 ──────────────────────────────────
+  dataSheet.clear();
+  dataSheet.clearFormats();
+
+  if (isFree) {
+    const schema   = proj.schema || {};
+    const leftLen  = (schema.leftGroup  && schema.leftGroup.columns)  ? schema.leftGroup.columns.length  : 0;
+    const rightLen = (schema.rightGroup && schema.rightGroup.columns) ? schema.rightGroup.columns.length : 0;
+
+    // 1행: 그룹 헤더
+    dataSheet.getRange(1, 1, 1, totalCols).setValues([headerRows[0]]);
+    if (leftLen > 1)  dataSheet.getRange(1, 1,           1, leftLen).merge();
+    if (rightLen > 1) dataSheet.getRange(1, leftLen + 1, 1, rightLen).merge();
+    dataSheet.getRange(1, 1, 1, totalCols)
+      .setHorizontalAlignment('center').setBackground('#E6F1FB').setFontWeight('bold');
+
+    // 2행: 컬럼 헤더
+    dataSheet.getRange(2, 1, 1, totalCols).setValues([headerRows[1]]);
+    dataSheet.getRange(2, 1, 1, totalCols).setFontWeight('bold').setBackground('#F1EFE8');
+
+    // 3행~: 데이터
+    if (newDataRows.length > 0) {
+      dataSheet.getRange(3, 1, newDataRows.length, totalCols).setValues(newDataRows);
+    }
+    dataSheet.setFrozenRows(2);
+  } else {
+    // 표준 모드
+    dataSheet.getRange(1, 1, 1, totalCols).setValues([headerRows[0]]);
+    dataSheet.setFrozenRows(1);
+    if (newDataRows.length > 0) {
+      dataSheet.getRange(2, 1, newDataRows.length, totalCols).setValues(newDataRows);
+    }
+  }
+
+  // ── 5. Results 키 재매핑 ─────────────────────────────────
+  if (rv.length > 1 && cKey >= 0) {
+    const newRv = [rv[0]];
+    for (let i = 1; i < rv.length; i++) {
+      const oldKey = String(rv[i][cKey] || '');
+      const newKey = oldToNew[oldKey];
+      if (newKey !== undefined) {
+        const row = rv[i].slice();
+        row[cKey] = newKey;
+        newRv.push(row);
+      }
+      // 매핑에 없는 결과(완료 아닌 잔여) → 제거
+    }
+    resultsSheet.clearContents();
+    resultsSheet.getRange(1, 1, newRv.length, rh.length).setValues(newRv);
+    resultsSheet.setFrozenRows(1);
+  }
+
+  // ── 6. Logs 키 재매핑 ────────────────────────────────────
+  const lv = logsSheet.getDataRange().getValues();
+  if (lv.length > 1) {
+    const lh    = lv[0].map(String);
+    const lcKey = findHeader_(lh, ['키']);
+    if (lcKey >= 0) {
+      const newLv = [lv[0]];
+      for (let i = 1; i < lv.length; i++) {
+        const oldKey = String(lv[i][lcKey] || '');
+        const newKey = oldToNew[oldKey];
+        if (newKey !== undefined) {
+          const row = lv[i].slice();
+          row[lcKey] = newKey;
+          newLv.push(row);
+        }
+      }
+      logsSheet.clearContents();
+      logsSheet.getRange(1, 1, newLv.length, lh.length).setValues(newLv);
+      logsSheet.setFrozenRows(1);
+    }
+  }
+
+  // ── 7. Assignments 범위 재계산 ───────────────────────────
+  const av = assignSheet.getDataRange().getValues();
+  if (av.length > 1) {
+    const newAv = [av[0]];
+    for (let i = 1; i < av.length; i++) {
+      const worker   = String(av[i][0] || '');
+      const oldStart = parseInt(av[i][1]) || 1;
+      const oldEnd   = parseInt(av[i][2]) || 1;
+      if (!worker) continue;
+
+      // 이 할당 범위 안에서 살아남은 행들의 newKey 를 수집
+      const survivingNewKeys = [];
+      for (let k = oldStart; k <= oldEnd; k++) {
+        const nk = oldToNew[String(k)];
+        if (nk !== undefined) survivingNewKeys.push(parseInt(nk));
+      }
+
+      if (survivingNewKeys.length > 0) {
+        // min~max 범위로 재설정 (새 번호 기준)
+        newAv.push([worker, Math.min(...survivingNewKeys), Math.max(...survivingNewKeys)]);
+      }
+      // 범위 내 완료 행이 하나도 없으면 이 할당 제거
+    }
+    assignSheet.clearContents();
+    assignSheet.getRange(1, 1, newAv.length, 3).setValues(newAv);
+    assignSheet.setFrozenRows(1);
+  }
+
+  SpreadsheetApp.flush();
+  return { ok: true, deleted: deletedCount, remaining: newDataRows.length };
 }
 
 // ============ 진단/유틸 함수 ============
