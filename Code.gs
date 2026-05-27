@@ -1023,9 +1023,10 @@ function computeWorkerStats_(projectId, startDate, endDate) {
     const headerCount = isFree && !isSingleHeader_(proj) ? 2 : 1;
     if (dv.length > headerCount) {
       const dataHeaders = dv[headerCount - 1].map(String);
-      const cdIdx = dataHeaders.findIndex(
-        h => h.trim().toLowerCase().replace(/\s+/g, '') === 'collecteddate'
-      );
+      const cdIdx = dataHeaders.findIndex(h => {
+        const n = h.trim().toLowerCase().replace(/\s+/g, '');
+        return n === 'collectedat' || n === 'collecteddate';
+      });
       if (cdIdx >= 0) {
         for (let i = headerCount; i < dv.length; i++) {
           const key = String(i - headerCount + 1); // 1-based
@@ -1151,10 +1152,11 @@ function updateStatsSheet(payload) {
   const procIdx = dataHeaders.findIndex(
     h => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === '처리주체'
   );
-  // Collected date 컬럼 인덱스
-  const cdIdx = dataHeaders.findIndex(
-    h => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === 'collecteddate'
-  );
+  // Collected at / Collected date 컬럼 인덱스
+  const cdIdx = dataHeaders.findIndex(h => {
+    const n = String(h || '').trim().toLowerCase().replace(/\s+/g, '');
+    return n === 'collectedat' || n === 'collecteddate';
+  });
 
   // ── 결과 로드 ──────────────────────────────────────────
   const rv = resultsSheet.getDataRange().getValues();
