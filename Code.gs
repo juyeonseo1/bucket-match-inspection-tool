@@ -1106,6 +1106,10 @@ function updateStatsSheet(payload) {
   const procIdx = dataHeaders.findIndex(
     h => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === '처리주체'
   );
+  // Collected date 컬럼 인덱스
+  const cdIdx = dataHeaders.findIndex(
+    h => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === 'collecteddate'
+  );
 
   // ── 결과 로드 ──────────────────────────────────────────
   const rv = resultsSheet.getDataRange().getValues();
@@ -1140,13 +1144,33 @@ function updateStatsSheet(payload) {
     human:  { total: 0, done: 0, match: 0, mismatch: 0 },
     system: { total: 0, done: 0, match: 0, mismatch: 0 }
   };
+  // 날짜 × 처리주체 집계: '날짜|처리주체' → { date, proc, total, done, match, mismatch }
+  const dayProcMap = {};
 
   for (let i = 0; i < dataRows.length; i++) {
     const key  = String(i + 1);
     const res  = results[key];
     const proc = procIdx >= 0 ? String(dataRows[i][procIdx] || '').toLowerCase().trim() : '';
 
-    if (proc === 'human' || proc === 'system') procStats[proc].total++;
+    // Collected date 추출
+    let dateStr = '';
+    if (cdIdx >= 0) {
+      const raw = dataRows[i][cdIdx];
+      if (raw instanceof Date) {
+        dateStr = Utilities.formatDate(raw, Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd');
+      } else {
+        dateStr = String(raw || '').slice(0, 10).trim();
+      }
+    }
+    if (!dateStr) dateStr = '(미분류)';
+
+    if (proc === 'human' || proc === 'system') {
+      procStats[proc].total++;
+      // 날짜 × 처리주체 집계
+      const dpKey = dateStr + '|' + proc;
+      if (!dayProcMap[dpKey]) dayProcMap[dpKey] = { date: dateStr, proc, total: 0, done: 0, match: 0, mismatch: 0 };
+      dayProcMap[dpKey].total++;
+    }
 
     if (res && res.decision) {
       doneCount++;
@@ -1161,6 +1185,12 @@ function updateStatsSheet(payload) {
         procStats[proc].done++;
         if (isMatch) procStats[proc].match++;
         else procStats[proc].mismatch++;
+        const dpKey = dateStr + '|' + proc;
+        if (dayProcMap[dpKey]) {
+          dayProcMap[dpKey].done++;
+          if (isMatch) dayProcMap[dpKey].match++;
+          else dayProcMap[dpKey].mismatch++;
+        }
       }
     }
   }
@@ -1280,6 +1310,34 @@ function updateStatsSheet(payload) {
   sh.setColumnWidth(4, 90);
   sh.setColumnWidth(5, 90);
   sh.setColumnWidth(6, 110);
+
+  // ── 처리주체_일별 시트 ─────────────────────────────────
+  // 날짜 오름차순 → 처리주체 알파벳 순 정렬
+  const dpRows = Object.values(dayProcMap).sort((a, b) => {
+    if (a.date < b.date) return -1;
+    if (a.date > b.date) return 1;
+    return a.proc.localeCompare(b.proc);
+  });
+  let dpSh = projectSs.getSheetByName('처리주체_일별');
+  if (dpSh) { dpSh.clear(); dpSh.clearFormats(); }
+  else       { dpSh = projectSs.insertSheet('처리주체_일별'); }
+
+  const DP_HEADER = ['날짜', '처리주체', '전체', '검수완료', '일치', '불일치', '정확도 (%)'];
+  const dpData = [DP_HEADER];
+  dpRows.forEach(r => {
+    const acc = r.done > 0 ? Math.round(r.match / r.done * 100) : 0;
+    dpData.push([r.date, r.proc, r.total, r.done, r.match, r.mismatch, acc]);
+  });
+  dpSh.getRange(1, 1, dpData.length, DP_HEADER.length).setValues(dpData);
+  dpSh.setFrozenRows(1);
+  dpSh.getRange(1, 1, 1, DP_HEADER.length).setFontWeight('bold').setBackground('#E6F1FB');
+  dpSh.setColumnWidth(1, 120);  // 날짜
+  dpSh.setColumnWidth(2, 90);   // 처리주체
+  dpSh.setColumnWidth(3, 70);   // 전체
+  dpSh.setColumnWidth(4, 90);   // 검수완료
+  dpSh.setColumnWidth(5, 70);   // 일치
+  dpSh.setColumnWidth(6, 80);   // 불일치
+  dpSh.setColumnWidth(7, 100);  // 정확도
 
   SpreadsheetApp.flush();
   return { ok: true, sheetUrl: 'https://docs.google.com/spreadsheets/d/' + projectSs.getId() };
