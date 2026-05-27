@@ -462,6 +462,10 @@
       </table>
     </div>
 
+    <div style="display:flex; gap:8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center;">
+      <button id="btn-update-stats-sheet" style="flex:1;">📊 통계 시트 업데이트</button>
+      <span style="font-size: 11px; color: #888780;">프로젝트 Google Sheet의 '통계' 탭을 지금 바로 업데이트합니다 (처리주체별 정확도 포함)</span>
+    </div>
     <div style="display:flex; gap:8px; margin-bottom: 1rem;">
       <button id="btn-download" class="primary" style="flex:1;">엑셀 다운로드 (현재 프로젝트 + 통계)</button>
       <button id="btn-reset-results" class="danger">이 프로젝트 결과 초기화</button>
@@ -1491,6 +1495,21 @@
     if (!confirm(`'${proj ? proj.name : ''}' 프로젝트의 모든 검수 결과를 초기화하시겠습니까?`)) return;
     const r = await call('resetResults', { password: adminPwCache, projectId: currentProjectId });
     if (r.ok) { results = {}; toast('결과 초기화 완료'); renderAdmin(); }
+  });
+
+  document.getElementById('btn-update-stats-sheet').addEventListener('click', async () => {
+    if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
+    const btn = document.getElementById('btn-update-stats-sheet');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 업데이트 중...';
+    try {
+      const r = await call('updateStatsSheet', { password: adminPwCache, projectId: currentProjectId });
+      if (r.ok) {
+        toast('통계 시트 업데이트 완료 — 시트 열기');
+        if (r.sheetUrl) window.open(r.sheetUrl, '_blank', 'noopener');
+      } else toast(r.error || '실패', true);
+    } catch(e) { toast('오류: ' + e.message, true); }
+    finally { btn.disabled = false; btn.textContent = orig; }
   });
 
   document.getElementById('btn-download').addEventListener('click', async () => {

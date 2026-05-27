@@ -1073,6 +1073,218 @@ function computeWorkerStats_(projectId, startDate, endDate) {
   return stats;
 }
 
+// ============ 통계 시트 업데이트 ============
+/**
+ * 프로젝트 Google Sheet 내 '통계' 탭을 현재 데이터로 업데이트한다.
+ * 내용: 검수 결과 통계 / 처리주체별 정확도 / 전체 진행 현황 / 작업자별 성과
+ */
+function updateStatsSheet(payload) {
+  if (!verifyAdminPassword(payload.password)) return { ok: false, error: '관리자 인증 실패' };
+  const projectId = String(payload.projectId || '');
+  if (!projectId) return { ok: false, error: '프로젝트가 선택되지 않았습니다' };
+
+  const proj = getProjectInfo_(projectId);
+  if (!proj) return { ok: false, error: '프로젝트를 찾을 수 없습니다' };
+
+  const projectSs   = SpreadsheetApp.openById(getProjectSpreadsheetId_(projectId));
+  const dataSheet    = projectSs.getSheetByName('Data');
+  const resultsSheet = projectSs.getSheetByName('Results');
+  const assignSheet  = projectSs.getSheetByName('Assignments');
+
+  // ── 데이터 로드 ────────────────────────────────────────
+  const dv = dataSheet.getDataRange().getValues();
+  let dataHeaders = [], dataRows = [];
+  if (proj.mode === 'free' && dv.length >= 2) {
+    dataHeaders = dv[1].map(String);
+    dataRows = dv.slice(2).filter(r => r.some(c => c !== '' && c !== null && c !== undefined));
+  } else if (dv.length > 0) {
+    dataHeaders = dv[0].map(String);
+    dataRows = dv.slice(1).filter(r => r.some(c => c !== '' && c !== null && c !== undefined));
+  }
+
+  // 처리주체 컬럼 인덱스 (대소문자·공백 무시)
+  const procIdx = dataHeaders.findIndex(
+    h => String(h || '').trim().toLowerCase().replace(/\s+/g, '') === '처리주체'
+  );
+
+  // ── 결과 로드 ──────────────────────────────────────────
+  const rv = resultsSheet.getDataRange().getValues();
+  const results = {};
+  if (rv.length > 0) {
+    const rh = rv[0].map(String);
+    const cKey = findHeader_(rh, ['키']);
+    const cD   = findHeader_(rh, ['검수결과']);
+    const cR   = findHeader_(rh, ['오매핑유형']);
+    for (let i = 1; i < rv.length; i++) {
+      const k = cKey >= 0 ? String(rv[i][cKey] || '') : '';
+      if (!k) continue;
+      results[k] = {
+        decision: cD >= 0 ? String(rv[i][cD] || '') : '',
+        reason:   cR >= 0 ? String(rv[i][cR] || '') : ''
+      };
+    }
+  }
+
+  // ── 할당 로드 ──────────────────────────────────────────
+  const av = assignSheet.getDataRange().getValues();
+  const assignments = [];
+  for (let i = 1; i < av.length; i++) {
+    if (av[i][0]) assignments.push({ worker: String(av[i][0]), start: parseInt(av[i][1]) || 1, end: parseInt(av[i][2]) || 1 });
+  }
+
+  // ── 통계 계산 ──────────────────────────────────────────
+  const total = dataRows.length;
+  let doneCount = 0, matchCount = 0, mismatchCount = 0;
+  const reasonCounts = {};
+  const procStats = {
+    human:  { total: 0, done: 0, match: 0, mismatch: 0 },
+    system: { total: 0, done: 0, match: 0, mismatch: 0 }
+  };
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const key  = String(i + 1);
+    const res  = results[key];
+    const proc = procIdx >= 0 ? String(dataRows[i][procIdx] || '').toLowerCase().trim() : '';
+
+    if (proc === 'human' || proc === 'system') procStats[proc].total++;
+
+    if (res && res.decision) {
+      doneCount++;
+      const isMatch = res.decision === '일치';
+      if (isMatch) {
+        matchCount++;
+      } else if (res.decision === '불일치') {
+        mismatchCount++;
+        if (res.reason) reasonCounts[res.reason] = (reasonCounts[res.reason] || 0) + 1;
+      }
+      if (proc === 'human' || proc === 'system') {
+        procStats[proc].done++;
+        if (isMatch) procStats[proc].match++;
+        else procStats[proc].mismatch++;
+      }
+    }
+  }
+
+  const decisionTotal = matchCount + mismatchCount;
+  const ws = computeWorkerStats_(projectId);
+  const updatedAt = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd HH:mm:ss');
+
+  // ── 통계 시트 초기화 ───────────────────────────────────
+  let sh = projectSs.getSheetByName('통계');
+  if (sh) { sh.clear(); sh.clearFormats(); }
+  else     { sh = projectSs.insertSheet('통계'); }
+
+  // ── 데이터 작성 ────────────────────────────────────────
+  const COLS = 6;
+  const rows = [];
+  const sectionIdxs    = [];   // 섹션 헤더 행 (0-based)
+  const tableHdrIdxs   = [];   // 테이블 헤더 행 (0-based)
+  const labelColEndIdx = [];   // 섹션1 레이블 행 범위
+
+  function pad(arr) {
+    while (arr.length < COLS) arr.push('');
+    return arr;
+  }
+  function push_(...args) { rows.push(pad([...args])); }
+  function pushSection(label) { sectionIdxs.push(rows.length); push_(label); }
+  function pushTHead(...args)  { tableHdrIdxs.push(rows.length); push_(...args); }
+
+  // ── 섹션 1: 검수 결과 통계 ─────────────────────────────
+  pushSection('📊 검수 결과 통계');
+  const sec1Start = rows.length;
+  push_('업데이트 시각', updatedAt);
+  push_('프로젝트',      proj.name);
+  push_('전체 데이터',   total);
+  push_('검수 완료',     doneCount);
+  push_('미완료',        total - doneCount);
+  push_('일치',          matchCount);
+  push_('불일치',        mismatchCount);
+  push_('진행률 (%)',    total > 0 ? Math.round(doneCount / total * 100) : 0);
+  push_('정확도 (일치율, %)', decisionTotal > 0 ? Math.round(matchCount / decisionTotal * 100) : 0);
+  const sec1End = rows.length - 1;
+  push_('');
+
+  // ── 섹션 2: 처리주체별 정확도 (NEW) ────────────────────
+  pushSection('🤖 처리주체별 정확도');
+  pushTHead('처리주체', '전체 데이터', '검수 완료', '일치', '불일치', '정확도 (%)');
+  ['human', 'system'].forEach(p => {
+    const s   = procStats[p];
+    const acc = s.done > 0 ? Math.round(s.match / s.done * 100) : 0;
+    push_(p, s.total, s.done, s.match, s.mismatch, acc);
+  });
+  push_('');
+
+  // ── 섹션 3: 불일치 사유 분포 ────────────────────────────
+  pushSection('❌ 불일치 사유 분포 (건수 많은 순)');
+  pushTHead('사유명', '건수', '비율 (%)');
+  const sortedReasons = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1]);
+  if (sortedReasons.length === 0) {
+    push_('(불일치 항목 없음)');
+  } else {
+    sortedReasons.forEach(([n, c]) => {
+      push_(n, c, mismatchCount > 0 ? Math.round(c / mismatchCount * 100) : 0);
+    });
+  }
+  push_('');
+
+  // ── 섹션 4: 전체 진행 현황 ─────────────────────────────
+  pushSection('👥 전체 진행 현황');
+  pushTHead('작업자', '범위', '완료', '할당', '진행률 (%)');
+  if (assignments.length === 0) {
+    push_('(할당된 작업자가 없습니다)');
+  } else {
+    const byWorker = {};
+    assignments.forEach(a => {
+      if (!byWorker[a.worker]) byWorker[a.worker] = [];
+      byWorker[a.worker].push(a);
+    });
+    Object.keys(byWorker).forEach(w => {
+      const ranges = byWorker[w];
+      const indices = new Set();
+      ranges.forEach(r => { for (let i = Math.max(1, r.start); i <= Math.min(dataRows.length, r.end); i++) indices.add(i); });
+      const t = indices.size;
+      let d = 0;
+      indices.forEach(i => { if (results[String(i)] && results[String(i)].decision) d++; });
+      push_(w, ranges.map(r => `${r.start}-${r.end}`).join(', '), d, t, t > 0 ? Math.round(d / t * 100) : 0);
+    });
+  }
+  push_('');
+
+  // ── 섹션 5: 작업자별 성과 ─────────────────────────────
+  pushSection('⏱ 작업자별 성과');
+  pushTHead('작업자', '처리 건수', '일치율 (%)', '중간 작업시간 (초)', '시간당 처리량 (건)');
+  if (ws.length === 0) {
+    push_('(데이터 없음)');
+  } else {
+    ws.forEach(s => push_(s.worker, s.total, s.matchRate, s.avgSec > 0 ? s.avgSec : '-', s.perHour > 0 ? s.perHour : '-'));
+  }
+
+  sh.getRange(1, 1, rows.length, COLS).setValues(rows);
+
+  // ── 서식 적용 ──────────────────────────────────────────
+  sectionIdxs.forEach(idx => {
+    sh.getRange(idx + 1, 1, 1, COLS)
+      .setFontWeight('bold').setFontSize(12)
+      .setBackground('#E6F1FB').setFontColor('#042C53');
+  });
+  tableHdrIdxs.forEach(idx => {
+    sh.getRange(idx + 1, 1, 1, COLS)
+      .setFontWeight('bold').setBackground('#F0F0F0');
+  });
+  // 섹션1 레이블 열 (key 값)
+  sh.getRange(sec1Start + 1, 1, sec1End - sec1Start + 1, 1).setFontWeight('bold');
+
+  sh.setColumnWidth(1, 230);
+  sh.setColumnWidth(2, 140);
+  sh.setColumnWidth(3, 110);
+  sh.setColumnWidth(4, 90);
+  sh.setColumnWidth(5, 90);
+  sh.setColumnWidth(6, 110);
+
+  SpreadsheetApp.flush();
+  return { ok: true, sheetUrl: 'https://docs.google.com/spreadsheets/d/' + projectSs.getId() };
+}
+
 // ============ 다운로드 ============
 function getDownloadToken(payload) {
   if (!verifyAdminPassword(payload.password)) return { ok: false, error: '관리자 인증 실패' };
