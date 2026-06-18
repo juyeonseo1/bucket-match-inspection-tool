@@ -198,6 +198,36 @@
     .overview-table .col-reason, .overview-table .col-memo { display: none; }
     .mode-options { flex-direction: column; }
   }
+
+  /* ===== 처리율 체크 ===== */
+  .pr-upload-zone {
+    border: 2px dashed rgba(0,0,0,0.15); border-radius: 8px; padding: 28px;
+    text-align: center; background: #fff; cursor: pointer; transition: all 0.15s; margin-bottom: 12px;
+  }
+  .pr-upload-zone:hover, .pr-upload-zone.drag { border-color: #185FA5; background: #E6F1FB; }
+  .pr-upload-icon { font-size: 24px; margin-bottom: 6px; opacity: 0.5; }
+  .pr-upload-text { font-weight: 500; font-size: 13px; margin-bottom: 2px; }
+  .pr-upload-hint { font-size: 11px; color: #888780; }
+  .pr-bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .pr-bar-track { flex: 1; height: 8px; background: #f1efe8; border-radius: 4px; overflow: hidden; }
+  .pr-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+  .pr-bar-fill.good { background: #1D9E75; }
+  .pr-bar-fill.mid { background: #BA7517; }
+  .pr-bar-fill.bad { background: #E24B4A; }
+  .pr-rate-text { font-weight: 600; min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .pr-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .pr-badge.top  { background: #E1F5EE; color: #085041; }
+  .pr-badge.zero { background: #FCEBEB; color: #791F1F; }
+  .pr-badge.warn { background: #FAEEDA; color: #BA7517; }
+  .pr-assign-row { display: grid; grid-template-columns: 1.4fr 0.7fr 0.7fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .pr-assign-row input { height: 32px; font-size: 13px; }
+  .admin-grid { display: grid; grid-template-columns: minmax(0, 6fr) minmax(400px, 4fr); gap: 20px; align-items: start; }
+  .admin-right { position: sticky; top: 16px; }
+  .pr-worker-legend { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; padding-top: 10px; border-top: 0.5px solid rgba(0,0,0,0.08); }
+  .pr-legend-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 12px; border: 1.5px solid; font-size: 11px; cursor: pointer; user-select: none; transition: opacity 0.15s; }
+  .pr-legend-chip.off { opacity: 0.35; }
+  .pr-legend-chip input[type=checkbox] { width: 11px; height: 11px; cursor: pointer; margin: 0; }
+  @media (max-width: 1200px) { .admin-grid { grid-template-columns: 1fr; } .admin-right { position: static; } }
 </style>
 </head>
 <body>
@@ -388,6 +418,7 @@
 
 <!-- 관리자 모드 -->
 <div id="admin-view" style="display:none;">
+<div class="admin-grid"><div class="admin-left">
   <div class="panel">
     <p class="panel-title">프로젝트 관리<span class="panel-title-tag">파일별로 독립적인 검수 작업 공간</span></p>
     <div class="projects-grid" id="projects-grid"></div>
@@ -542,7 +573,120 @@
   <div id="admin-no-project" class="no-assign" style="display:none;">
     <strong>프로젝트를 선택해주세요</strong>위 카드에서 프로젝트를 선택하면 데이터를 관리할 수 있습니다
   </div>
-</div>
+
+  <!-- ===== 처리율 체크 섹션 ===== -->
+  <div style="display:flex; align-items:center; gap:12px; margin:28px 0 16px;">
+    <div style="flex:1; height:1px; background:rgba(0,0,0,0.12);"></div>
+    <span style="font-size:11px; color:#888780; text-transform:uppercase; letter-spacing:.08em; white-space:nowrap;">처리율 체크 (외부 작업)</span>
+    <div style="flex:1; height:1px; background:rgba(0,0,0,0.12);"></div>
+  </div>
+
+  <div class="panel" id="pr-upload-panel">
+    <p class="panel-title">파일 업로드<span class="panel-title-tag">CSV / XLSX · 처리주체==human 행만 집계</span></p>
+    <div id="pr-upload-zone" class="pr-upload-zone">
+      <input type="file" id="pr-file-input" accept=".csv,.xlsx,.xls" style="display:none;" />
+      <div class="pr-upload-icon">⬆</div>
+      <div class="pr-upload-text">파일 클릭 또는 드래그</div>
+      <div class="pr-upload-hint">CSV, XLSX 지원</div>
+    </div>
+    <div id="pr-file-info" style="display:none; padding:10px 14px; background:#f1efe8; border-radius:6px; margin-bottom:12px; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <div>
+        <div style="font-weight:500; font-size:13px;" id="pr-file-name-display"></div>
+        <div style="font-size:11px; color:#5f5e5a;" id="pr-file-meta-display"></div>
+      </div>
+      <button class="small" id="pr-reset-btn">다른 파일</button>
+    </div>
+    <div id="pr-error-box" style="display:none; padding:8px 12px; background:#FCEBEB; border:0.5px solid #E24B4A; border-radius:6px; font-size:12px; color:#791F1F; margin-bottom:10px;"></div>
+    <div id="pr-col-map" style="display:none; margin-bottom:4px; padding:14px; background:#f1efe8; border-radius:8px;">
+      <div style="font-size:11px; font-weight:600; color:#888780; text-transform:uppercase; letter-spacing:.05em; margin-bottom:10px;">컬럼 매핑</div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px;">
+        <div>
+          <label style="font-size:11px; color:#888780; display:block; margin-bottom:3px;">처리주체 컬럼</label>
+          <select id="pr-agent-col" style="width:100%; height:32px; font-size:13px;"></select>
+        </div>
+        <div>
+          <label style="font-size:11px; color:#888780; display:block; margin-bottom:3px;">번호 컬럼</label>
+          <select id="pr-num-col" style="width:100%; height:32px; font-size:13px;"></select>
+        </div>
+        <div>
+          <label style="font-size:11px; color:#888780; display:block; margin-bottom:3px;">진행상태 컬럼</label>
+          <select id="pr-status-col" style="width:100%; height:32px; font-size:13px;"></select>
+        </div>
+        <div>
+          <label style="font-size:11px; color:#888780; display:block; margin-bottom:3px;">완료 상태 값</label>
+          <select id="pr-done-val" style="width:100%; height:32px; font-size:13px;"></select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="pr-assign-panel" style="display:none;">
+    <p class="panel-title">작업자 할당 범위<span class="panel-title-tag">결원이 있으면 × 버튼으로 제거 후 계산하기</span></p>
+    <div style="display:grid; grid-template-columns:1.4fr 0.7fr 0.7fr auto; gap:8px; font-size:11px; color:#888780; padding:0 4px; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px;">
+      <div>작업자</div><div>시작 번호</div><div>끝 번호</div><div></div>
+    </div>
+    <div id="pr-assign-list"></div>
+    <div class="add-row" style="flex-wrap:wrap;">
+      <input type="text" id="pr-new-worker" placeholder="작업자 이름" style="flex:1.2; height:32px; font-size:13px; min-width:100px;" />
+      <input type="number" id="pr-new-start" placeholder="시작" style="flex:.6; height:32px; font-size:13px;" min="1" />
+      <input type="number" id="pr-new-end" placeholder="끝" style="flex:.6; height:32px; font-size:13px;" min="1" />
+      <button id="pr-btn-add-worker">추가</button>
+      <button id="pr-btn-auto">균등 분배</button>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:10px; padding-top:10px; border-top:0.5px solid rgba(0,0,0,0.1); flex-wrap:wrap;">
+      <label style="font-size:12px; color:#5f5e5a; font-weight:500; white-space:nowrap;">기준 날짜</label>
+      <input type="date" id="pr-date-input" style="height:32px; font-size:13px;" />
+      <span style="font-size:11px; color:#888780; flex:1;">파일만으로는 날짜를 알 수 없으므로 직접 선택</span>
+      <button id="pr-btn-calc" class="primary">계산하기</button>
+    </div>
+  </div>
+
+  <div class="panel" id="pr-results-panel" style="display:none;">
+    <p class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>처리율 결과<span style="font-size:11px; font-weight:400; margin-left:8px;" id="pr-saved-badge"></span></span>
+      <button class="small" id="pr-csv-btn">⬇ CSV</button>
+    </p>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:16px;">
+      <div class="stat"><div class="stat-label">전체 할당</div><div class="stat-value" id="pr-m-total">—</div></div>
+      <div class="stat"><div class="stat-label">실제(완료)</div><div class="stat-value" id="pr-m-done" style="color:#085041;">—</div></div>
+      <div class="stat"><div class="stat-label">미완료</div><div class="stat-value" id="pr-m-pending" style="color:#791F1F;">—</div></div>
+      <div class="stat"><div class="stat-label">전체 평균 처리율</div><div class="stat-value" id="pr-m-avg">—</div></div>
+    </div>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>작업자</th><th>범위</th>
+          <th style="text-align:right;">실제/할당</th>
+          <th>처리율</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="pr-worker-tbody"></tbody>
+    </table>
+  </div>
+
+</div><!-- end admin-left -->
+<div class="admin-right">
+  <div class="panel" id="pr-chart-panel">
+    <p class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>처리율 추이<span class="panel-title-tag" style="margin-left:8px;">일별 누적 · 작업자별</span></span>
+      <button class="small" id="pr-chart-refresh" title="Sheets에서 전체 이력 다시 불러오기">↺ 새로고침</button>
+    </p>
+    <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px; flex-wrap:wrap;">
+      <input type="date" id="pr-chart-start" style="height:30px; font-size:12px; padding:0 6px;" />
+      <span style="font-size:12px; color:#888780;">~</span>
+      <input type="date" id="pr-chart-end" style="height:30px; font-size:12px; padding:0 6px;" />
+      <button class="small" id="pr-chart-today">오늘</button>
+      <button class="small" id="pr-chart-all">전체</button>
+    </div>
+    <div id="pr-chart-empty" style="text-align:center; padding:32px 24px; color:#888780; font-size:13px;">저장된 이력이 없습니다.<br>계산하기를 실행하면 자동 저장됩니다.</div>
+    <div id="pr-chart-wrap" style="display:none; position:relative; height:380px;">
+      <canvas id="pr-chart"></canvas>
+    </div>
+    <div id="pr-worker-legend" class="pr-worker-legend" style="display:none;"></div>
+  </div>
+</div><!-- end admin-right -->
+</div><!-- end admin-grid -->
+</div><!-- end admin-view -->
 
 <!-- 작업자 모드 -->
 <div id="worker-view" style="display:none;">
@@ -628,6 +772,7 @@
 <div id="toast" class="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script>
 (function(){
   const RESERVED_KEYS = ['1', '2', '3', '4'];
@@ -881,7 +1026,9 @@
     document.querySelectorAll('.mode-tab').forEach(x => x.classList.toggle('active', x.dataset.mode === mode));
     document.getElementById('admin-view').style.display = mode === 'admin' ? 'block' : 'none';
     document.getElementById('worker-view').style.display = mode === 'worker' ? 'block' : 'none';
-    if (mode === 'admin') renderAdmin();
+    // 관리자 모드: 컨테이너 확장해서 오른쪽 차트 공간 확보 (기존 패널 너비 유지)
+    document.querySelector('.container').style.maxWidth = mode === 'admin' ? '1800px' : '';
+    if (mode === 'admin') { renderAdmin(); prInit(); }
     else renderWorker();
   }
   document.querySelectorAll('.mode-tab').forEach(t => {
@@ -1066,9 +1213,15 @@
       reader.onload = (ev) => {
         try {
           const data = new Uint8Array(ev.target.result);
-          const wb = XLSX.read(data, { type: 'array' });
+          const wb = XLSX.read(data, { type: 'array', cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          const rows = rawRows.map(row => row.map(v => {
+            if (v instanceof Date) {
+              return v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0');
+            }
+            return v;
+          }));
           let merges = [];
           if (isFree && ws['!merges']) {
             ws['!merges'].forEach(m => {
@@ -2007,6 +2160,483 @@
     const matched = REASONS.find(r => { if (!r.shortcut) return false; if (/^[a-zA-Z]$/.test(r.shortcut)) return r.shortcut.toUpperCase() === e.key.toUpperCase(); return r.shortcut === e.key; });
     if (matched) setReason(matched.name);
   });
+
+  // ===== 처리율 체크 =====
+  let prRawData = [];
+  let prColumns = [];
+  let prAssignments = [];
+  let prLastResults = [];
+  let prInited = false;
+  let prChartInstance = null;
+  let prHistoryCache = [];
+  const PR_COLORS = [
+    '#185FA5','#1D9E75','#E24B4A','#BA7517','#7C3AED',
+    '#0891B2','#059669','#DC2626','#D97706','#9333EA',
+    '#2563EB','#16A34A','#EA580C'
+  ];
+
+  function prInit() {
+    if (prInited) { prLoadHistory(); return; }
+    prInited = true;
+    prSetupListeners();
+    google.script.run
+      .withSuccessHandler(function(names) {
+        prAssignments = (names || []).map(function(n) { return { name: n, start: 0, end: 0 }; });
+      })
+      .withFailureHandler(function(err) { console.error('prInit workers error', err); })
+      .getProcessingRateWorkers();
+    prLoadHistory();
+  }
+
+  function prSetupListeners() {
+    const zone  = document.getElementById('pr-upload-zone');
+    const input = document.getElementById('pr-file-input');
+
+    zone.addEventListener('click', function() { input.click(); });
+    input.addEventListener('change', function(e) { if (e.target.files[0]) prHandleFile(e.target.files[0]); });
+    ['dragover','dragenter'].forEach(function(ev) {
+      zone.addEventListener(ev, function(e) { e.preventDefault(); zone.classList.add('drag'); });
+    });
+    ['dragleave','drop'].forEach(function(ev) {
+      zone.addEventListener(ev, function(e) { e.preventDefault(); zone.classList.remove('drag'); });
+    });
+    zone.addEventListener('drop', function(e) {
+      if (e.dataTransfer.files[0]) prHandleFile(e.dataTransfer.files[0]);
+    });
+
+    document.getElementById('pr-reset-btn').addEventListener('click', prReset);
+    document.getElementById('pr-status-col').addEventListener('change', prUpdateDoneValues);
+    document.getElementById('pr-btn-add-worker').addEventListener('click', prAddWorker);
+    document.getElementById('pr-btn-auto').addEventListener('click', prAutoDistribute);
+    document.getElementById('pr-btn-calc').addEventListener('click', prCalculate);
+    document.getElementById('pr-csv-btn').addEventListener('click', prDownloadCSV);
+    document.getElementById('pr-new-worker').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') document.getElementById('pr-btn-add-worker').click();
+    });
+    document.getElementById('pr-chart-refresh').addEventListener('click', function() {
+      this.textContent = '↺ 불러오는 중...';
+      var btn = this;
+      google.script.run
+        .withSuccessHandler(function(history) {
+          // 새로고침 시에는 Sheets 데이터로 강제 덮어쓰기 (명시적 요청이므로)
+          prHistoryCache = [];
+          prMergeHistory(history);
+          btn.textContent = '↺ 새로고침';
+        })
+        .withFailureHandler(function() { btn.textContent = '↺ 새로고침'; })
+        .getProcessingRateHistory();
+    });
+    document.getElementById('pr-chart-start').addEventListener('change', prApplyChartFilter);
+    document.getElementById('pr-chart-end').addEventListener('change', prApplyChartFilter);
+    document.getElementById('pr-chart-today').addEventListener('click', function() {
+      const t = document.getElementById('pr-date-input').value || new Date().toISOString().slice(0, 10);
+      document.getElementById('pr-chart-start').value = t;
+      document.getElementById('pr-chart-end').value = t;
+      prApplyChartFilter();
+    });
+    document.getElementById('pr-chart-all').addEventListener('click', function() {
+      document.getElementById('pr-chart-start').value = '';
+      document.getElementById('pr-chart-end').value = '';
+      prApplyChartFilter();
+    });
+    // 기본값: 오늘 날짜
+    const _today = new Date();
+    document.getElementById('pr-date-input').value =
+      _today.getFullYear() + '-' +
+      String(_today.getMonth() + 1).padStart(2, '0') + '-' +
+      String(_today.getDate()).padStart(2, '0');
+  }
+
+  function prParseNum(v) {
+    return parseFloat(String(v === undefined || v === null ? '' : v).replace(/,/g, '').trim());
+  }
+
+  function prHandleFile(file) {
+    prShowError('');
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!raw.length) { prShowError('데이터가 없습니다'); return; }
+        prRawData = raw.map(function(row) {
+          const clean = {};
+          for (const k in row) clean[String(k).trim()] = row[k];
+          return clean;
+        });
+        prColumns = Object.keys(prRawData[0]);
+        prShowFileInfo(file);
+        prSetupColMap();
+        document.getElementById('pr-assign-panel').style.display = '';
+        prRenderAssignments();
+      } catch(err) {
+        prShowError('파일 읽기 실패: ' + err.message);
+      }
+    };
+    reader.onerror = function() { prShowError('파일을 읽을 수 없습니다'); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function prShowFileInfo(file) {
+    document.getElementById('pr-upload-zone').style.display = 'none';
+    const info = document.getElementById('pr-file-info');
+    info.style.display = 'flex';
+    document.getElementById('pr-file-name-display').textContent = file.name;
+    document.getElementById('pr-file-meta-display').textContent =
+      prRawData.length.toLocaleString() + '개 행 · ' + (file.size / 1024).toFixed(1) + ' KB';
+  }
+
+  function prSetupColMap() {
+    document.getElementById('pr-col-map').style.display = '';
+    const opts = prColumns.map(function(c) { return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
+    ['pr-agent-col','pr-num-col','pr-status-col'].forEach(function(id) {
+      document.getElementById(id).innerHTML = opts;
+    });
+    const guessAgent  = prColumns.find(function(c) { return /처리주체|agent|담당/i.test(c); }) || prColumns[0];
+    const guessNum    = prColumns.find(function(c) { return /^번호$|^no$|^#$|number/i.test(c); });
+    const guessStatus = prColumns.find(function(c) { return /진행|상태|status/i.test(c); });
+    if (guessAgent)  document.getElementById('pr-agent-col').value  = guessAgent;
+    if (guessNum)    document.getElementById('pr-num-col').value    = guessNum;
+    if (guessStatus) document.getElementById('pr-status-col').value = guessStatus;
+    prUpdateDoneValues();
+  }
+
+  function prUpdateDoneValues() {
+    const col = document.getElementById('pr-status-col').value;
+    if (!col || !prRawData.length) return;
+    const uniq = [];
+    const seen = {};
+    prRawData.forEach(function(r) {
+      const v = String(r[col] === undefined ? '' : r[col]).trim();
+      if (v && !seen[v]) { seen[v] = true; uniq.push(v); }
+    });
+    const sel = document.getElementById('pr-done-val');
+    sel.innerHTML = uniq.map(function(v) { return '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>'; }).join('');
+    const guessDone = uniq.find(function(v) { return /완료|done|complete/i.test(v); });
+    if (guessDone) sel.value = guessDone;
+  }
+
+  function prRenderAssignments() {
+    const list = document.getElementById('pr-assign-list');
+    list.innerHTML = prAssignments.map(function(a, i) {
+      return '<div class="pr-assign-row">' +
+        '<input type="text" value="' + escapeHtml(a.name) + '" data-pri="' + i + '" data-prk="name" style="height:32px;font-size:13px;" />' +
+        '<input type="number" value="' + (a.start || '') + '" data-pri="' + i + '" data-prk="start" style="height:32px;font-size:13px;" min="1" placeholder="시작" />' +
+        '<input type="number" value="' + (a.end || '') + '" data-pri="' + i + '" data-prk="end" style="height:32px;font-size:13px;" min="1" placeholder="끝" />' +
+        '<button class="small danger" data-prrm="' + i + '">× 제거</button>' +
+        '</div>';
+    }).join('');
+    list.querySelectorAll('input').forEach(function(inp) {
+      inp.addEventListener('input', function(e) {
+        const i = +e.target.dataset.pri;
+        const k = e.target.dataset.prk;
+        prAssignments[i][k] = k === 'name' ? e.target.value : (+e.target.value || 0);
+      });
+    });
+    list.querySelectorAll('[data-prrm]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        prAssignments.splice(+btn.dataset.prrm, 1);
+        prRenderAssignments();
+      });
+    });
+  }
+
+  function prAddWorker() {
+    const name = document.getElementById('pr-new-worker').value.trim();
+    if (!name) { toast('작업자 이름을 입력하세요', true); return; }
+    const start = +document.getElementById('pr-new-start').value || 0;
+    const end   = +document.getElementById('pr-new-end').value   || 0;
+    prAssignments.push({ name: name, start: start, end: end });
+    document.getElementById('pr-new-worker').value = '';
+    document.getElementById('pr-new-start').value  = '';
+    document.getElementById('pr-new-end').value    = '';
+    prRenderAssignments();
+    google.script.run.saveProcessingRateWorkers(prAssignments.map(function(a) { return a.name; }));
+  }
+
+  function prAutoDistribute() {
+    const numCol   = document.getElementById('pr-num-col').value;
+    const agentCol = document.getElementById('pr-agent-col').value;
+    if (!numCol || !prRawData.length || !prAssignments.length) {
+      toast('파일과 작업자 목록이 필요합니다', true); return;
+    }
+    const filtered = agentCol
+      ? prRawData.filter(function(r) { return String(r[agentCol] || '').trim().toLowerCase() === 'human'; })
+      : prRawData;
+    const nums = filtered.map(function(r) { return prParseNum(r[numCol]); }).filter(function(n) { return !isNaN(n) && n > 0; });
+    if (!nums.length) { toast('번호 컬럼에서 유효한 값을 찾을 수 없습니다', true); return; }
+    const minNum = Math.min.apply(null, nums);
+    const maxNum = Math.max.apply(null, nums);
+    const count = prAssignments.length;
+    const per = Math.ceil((maxNum - minNum + 1) / count);
+    prAssignments = prAssignments.map(function(a, i) {
+      return { name: a.name, start: minNum + i * per, end: Math.min(minNum + (i + 1) * per - 1, maxNum) };
+    });
+    prRenderAssignments();
+  }
+
+  function prCalculate() {
+    prShowError('');
+    const agentCol  = document.getElementById('pr-agent-col').value;
+    const numCol    = document.getElementById('pr-num-col').value;
+    const statusCol = document.getElementById('pr-status-col').value;
+    const doneVal   = document.getElementById('pr-done-val').value;
+    if (!numCol || !statusCol || !doneVal) { prShowError('컬럼 매핑을 확인해주세요'); return; }
+
+    const filtered = agentCol
+      ? prRawData.filter(function(r) { return String(r[agentCol] || '').trim().toLowerCase() === 'human'; })
+      : prRawData;
+
+    let totalDone = 0, totalInRange = 0;
+    const calcResults = prAssignments.map(function(a) {
+      const inRange = filtered.filter(function(r) {
+        const n = prParseNum(r[numCol]);
+        return !isNaN(n) && n >= a.start && n <= a.end;
+      });
+      const done = inRange.filter(function(r) { return String(r[statusCol]).trim() === doneVal; }).length;
+      const assigned = a.end - a.start + 1;
+      totalDone += done;
+      totalInRange += assigned;
+      return { name: a.name, start: a.start, end: a.end,
+        assigned: assigned, actual: inRange.length,
+        done: done, pending: assigned - done,
+        rate: assigned > 0 ? done / assigned * 100 : 0 };
+    });
+
+    prLastResults = calcResults;
+    prRenderResults(calcResults, totalDone, totalInRange);
+
+    const dateStr = document.getElementById('pr-date-input').value;
+    if (!dateStr) { toast('기준 날짜를 선택해주세요', true); return; }
+
+    // 저장 기다리지 않고 즉시 차트 업데이트
+    var tempHistory = prHistoryCache.filter(function(r) {
+      return String(r['날짜']).slice(0, 10) !== dateStr;
+    });
+    calcResults.forEach(function(r) {
+      tempHistory.push({ '날짜': dateStr, '작업자명': r.name, '처리율': r.rate });
+    });
+    prHistoryCache = tempHistory;
+    prApplyChartFilter();
+
+    const badge = document.getElementById('pr-saved-badge');
+    badge.textContent = '저장 중...';
+    badge.style.color = '#888780';
+
+    google.script.run
+      .withSuccessHandler(function() {
+        badge.textContent = '✓ ' + dateStr + ' 저장됨';
+        badge.style.color = '#1D9E75';
+        // 캐시에 이미 반영됐으므로 Sheets 재조회 불필요
+      })
+      .withFailureHandler(function(err) {
+        badge.textContent = '저장 실패: ' + (err.message || err);
+        badge.style.color = '#E24B4A';
+        console.error('pr save error', err);
+      })
+      .saveProcessingRateSnapshot(dateStr, calcResults.map(function(r) {
+        return { name: r.name, start: r.start, end: r.end,
+          assigned: r.assigned, actual: r.actual,
+          done: r.done, pending: r.pending, rate: r.rate };
+      }));
+  }
+
+  function prRenderResults(calcResults, totalDone, totalInRange) {
+    const avg = totalInRange ? totalDone / totalInRange * 100 : 0;
+    document.getElementById('pr-m-total').textContent   = totalInRange.toLocaleString() + '건';
+    document.getElementById('pr-m-done').textContent    = totalDone.toLocaleString() + '건';
+    document.getElementById('pr-m-pending').textContent = (totalInRange - totalDone).toLocaleString() + '건';
+    document.getElementById('pr-m-avg').textContent     = avg.toFixed(1) + '%';
+
+    const rates = calcResults.map(function(r) { return r.rate; });
+    const maxRate = Math.max.apply(null, rates.concat([0.1]));
+    const topRate = Math.max.apply(null, rates);
+    const topCount = calcResults.filter(function(r) { return r.rate === topRate; }).length;
+
+    const tbody = document.getElementById('pr-worker-tbody');
+    tbody.innerHTML = calcResults.map(function(r) {
+      let cls = 'good', badge = '';
+      if (r.rate === 0) { cls = 'bad'; badge = '<span class="pr-badge zero">미착수</span>'; }
+      else if (r.rate < avg - 0.01) { cls = 'mid'; badge = '<span class="pr-badge warn">평균↓</span>'; }
+      if (r.rate === topRate && r.rate > 0 && topCount === 1) {
+        badge = '<span class="pr-badge top">최고</span>';
+      }
+      const width = Math.round(r.rate / Math.max(maxRate, 10) * 100);
+      return '<tr>' +
+        '<td style="font-weight:500;">' + escapeHtml(r.name) + '</td>' +
+        '<td style="font-size:12px;color:#5f5e5a;font-variant-numeric:tabular-nums;">' + r.start.toLocaleString() + ' ~ ' + r.end.toLocaleString() + '</td>' +
+        '<td style="text-align:right;font-variant-numeric:tabular-nums;">' +
+          r.done.toLocaleString() +
+          '<span style="color:#888780;font-size:11px;"> / ' + r.assigned.toLocaleString() + '</span>' +
+          '<div style="font-size:10px;color:#888780;">human ' + r.actual.toLocaleString() + '건</div>' +
+        '</td>' +
+        '<td><div class="pr-bar-wrap"><div class="pr-bar-track"><div class="pr-bar-fill ' + cls + '" style="width:' + width + '%;"></div></div><span class="pr-rate-text">' + r.rate.toFixed(1) + '%</span></div></td>' +
+        '<td>' + badge + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('pr-results-panel').style.display = '';
+    document.getElementById('pr-results-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function prMergeHistory(sheetsData) {
+    // 정규화: 날짜 형식 통일 (ISO 등 어떤 형식이든 YYYY-MM-DD 앞 10자)
+    var normalized = (sheetsData || []).map(function(r) {
+      return {
+        '날짜':    String(r['날짜']    || '').slice(0, 10),
+        '작업자명': String(r['작업자명'] || ''),
+        '처리율':  parseFloat(r['처리율']) || 0
+      };
+    });
+    // 현재 캐시에 없는 날짜+작업자 조합만 추가 (현재 세션 계산값 보호)
+    var cacheKeys = {};
+    prHistoryCache.forEach(function(r) {
+      cacheKeys[r['날짜'] + '|' + r['작업자명']] = true;
+    });
+    normalized.forEach(function(r) {
+      var key = r['날짜'] + '|' + r['작업자명'];
+      if (!cacheKeys[key]) {
+        prHistoryCache.push(r);
+        cacheKeys[key] = true;
+      }
+    });
+    prApplyChartFilter();
+  }
+
+  function prLoadHistory() {
+    google.script.run
+      .withSuccessHandler(function(history) { prMergeHistory(history); })
+      .withFailureHandler(function(err) { console.error('prLoadHistory error', err); })
+      .getProcessingRateHistory();
+  }
+
+  function prApplyChartFilter() {
+    const start = document.getElementById('pr-chart-start').value;
+    const end   = document.getElementById('pr-chart-end').value;
+    var filtered = prHistoryCache;
+    if (start || end) {
+      filtered = prHistoryCache.filter(function(r) {
+        var d = String(r['날짜']).slice(0, 10); // ISO/문자열 어떤 형식이든 앞 10자 (YYYY-MM-DD)
+        return (!start || d >= start) && (!end || d <= end);
+      });
+    }
+    prRenderChart(filtered);
+  }
+
+  function prRenderChart(history) {
+    const empty = document.getElementById('pr-chart-empty');
+    const wrap  = document.getElementById('pr-chart-wrap');
+    if (!history.length) { empty.style.display = ''; wrap.style.display = 'none'; return; }
+    if (typeof Chart === 'undefined') {
+      empty.textContent = '차트 라이브러리 로드 실패. 페이지를 새로고침해주세요.';
+      empty.style.display = ''; wrap.style.display = 'none'; return;
+    }
+    empty.style.display = 'none';
+    wrap.style.display  = '';
+
+    const dates = [];
+    const datesSeen = {};
+    const workers = [];
+    const workersSeen = {};
+    history.forEach(function(r) {
+      const d = String(r['날짜']).slice(0, 10); // YYYY-MM-DD 정규화
+      const w = String(r['작업자명']);
+      if (!datesSeen[d]) { datesSeen[d] = true; dates.push(d); }
+      if (!workersSeen[w]) { workersSeen[w] = true; workers.push(w); }
+    });
+    dates.sort();
+
+    const datasets = workers.map(function(w, i) {
+      return {
+        label: w,
+        data: dates.map(function(d) {
+          const row = history.find(function(r) {
+            return String(r['날짜']).slice(0, 10) === d && String(r['작업자명']) === w;
+          });
+          return row != null ? parseFloat(row['처리율']) : null;
+        }),
+        borderColor: PR_COLORS[i % PR_COLORS.length],
+        backgroundColor: PR_COLORS[i % PR_COLORS.length] + '20',
+        tension: 0.3, spanGaps: true, pointRadius: 4, pointHoverRadius: 6, borderWidth: 2
+      };
+    });
+
+    if (prChartInstance) { prChartInstance.destroy(); prChartInstance = null; }
+    const ctx = document.getElementById('pr-chart').getContext('2d');
+    prChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: { labels: dates, datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(c) { return ' ' + c.dataset.label + ': ' + (c.parsed.y != null ? c.parsed.y.toFixed(1) : '—') + '%'; } } }
+        },
+        scales: {
+          y: { min: 0, max: 100, ticks: { callback: function(v) { return v + '%'; }, font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.06)' } },
+          x: { ticks: { font: { size: 11 }, maxRotation: 45 }, grid: { display: false } }
+        }
+      }
+    });
+
+    // 커스텀 작업자 토글 체크박스
+    var legendDiv = document.getElementById('pr-worker-legend');
+    legendDiv.style.display = '';
+    legendDiv.innerHTML = '';
+    datasets.forEach(function(ds, i) {
+      var chip = document.createElement('label');
+      chip.className = 'pr-legend-chip';
+      chip.style.borderColor = ds.borderColor;
+      chip.style.color = ds.borderColor;
+      chip.innerHTML =
+        '<input type="checkbox" checked data-ci="' + i + '" style="accent-color:' + ds.borderColor + ';">' +
+        '<span>' + escapeHtml(ds.label) + '</span>';
+      chip.querySelector('input').addEventListener('change', function() {
+        var idx = +this.dataset.ci;
+        prChartInstance.setDatasetVisibility(idx, this.checked);
+        prChartInstance.update();
+        chip.classList.toggle('off', !this.checked);
+      });
+      legendDiv.appendChild(chip);
+    });
+  }
+
+  function prDownloadCSV() {
+    if (!prLastResults.length) return;
+    const h = ['작업자','시작번호','끝번호','할당건수','실제데이터','완료','미완료','처리율(%)'];
+    const rows = prLastResults.map(function(r) {
+      return [r.name, r.start, r.end, r.assigned, r.actual, r.done, r.pending, r.rate.toFixed(1)];
+    });
+    const csv = [h].concat(rows).map(function(row) {
+      return row.map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
+    }).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '처리율_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function prReset() {
+    prRawData = []; prColumns = []; prLastResults = [];
+    document.getElementById('pr-upload-zone').style.display = '';
+    document.getElementById('pr-file-info').style.display = 'none';
+    document.getElementById('pr-col-map').style.display = 'none';
+    document.getElementById('pr-assign-panel').style.display = 'none';
+    document.getElementById('pr-results-panel').style.display = 'none';
+    prShowError('');
+    document.getElementById('pr-file-input').value = '';
+  }
+
+  function prShowError(msg) {
+    const el = document.getElementById('pr-error-box');
+    if (msg) { el.textContent = msg; el.style.display = ''; }
+    else { el.style.display = 'none'; }
+  }
+  // ===== 처리율 체크 끝 =====
 
   setInterval(refreshState, 30000);
   loadInitial();

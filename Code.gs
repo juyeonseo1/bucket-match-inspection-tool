@@ -1938,3 +1938,109 @@ function debugProjectSheets(projectId) {
   });
   return 'debugProjectSheets 실행 완료';
 }
+
+// ============ 처리율 체크 ============
+const PR_WORKER_SHEET = '처리율_작업자';
+const PR_HISTORY_SHEET = '처리율_이력';
+const PR_DEFAULT_WORKERS = [
+  '남이현','권진비','주상현','문채원','송하영',
+  '김명수','남윤희','유현','김화음','임현지','엄다미','이가람','김은비'
+];
+
+function getProcessingRateWorkers() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(PR_WORKER_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(PR_WORKER_SHEET);
+    sheet.getRange(1, 1).setValue('작업자명');
+    sheet.setFrozenRows(1);
+    if (PR_DEFAULT_WORKERS.length > 0) {
+      sheet.getRange(2, 1, PR_DEFAULT_WORKERS.length, 1)
+        .setValues(PR_DEFAULT_WORKERS.map(function(n) { return [n]; }));
+    }
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return PR_DEFAULT_WORKERS.slice();
+  return sheet.getRange(2, 1, lastRow - 1, 1).getValues()
+    .map(function(r) { return String(r[0] || ''); })
+    .filter(function(n) { return n.trim() !== ''; });
+}
+
+function saveProcessingRateWorkers(names) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(PR_WORKER_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(PR_WORKER_SHEET);
+    sheet.getRange(1, 1).setValue('작업자명');
+    sheet.setFrozenRows(1);
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 1).clearContent();
+  if (names && names.length > 0) {
+    sheet.getRange(2, 1, names.length, 1).setValues(names.map(function(n) { return [String(n)]; }));
+  }
+  return 'ok';
+}
+
+function saveProcessingRateSnapshot(dateStr, workerResults) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tz = Session.getScriptTimeZone() || 'Asia/Seoul';
+  const headers = ['날짜','작업자명','시작번호','끝번호','할당건수','실제데이터','완료','미완료','처리율'];
+  let sheet = ss.getSheetByName(PR_HISTORY_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(PR_HISTORY_SHEET);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  }
+  // 같은 날짜 기존 행 삭제 (역순)
+  // Sheets가 날짜 문자열을 Date 객체로 자동 변환하므로 instanceof Date 처리 필요
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    const vals = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = vals.length - 1; i >= 0; i--) {
+      var v = vals[i][0];
+      var vStr = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v);
+      if (vStr === dateStr) sheet.deleteRow(i + 2);
+    }
+  }
+  // 새 행 추가
+  if (workerResults && workerResults.length > 0) {
+    const rows = workerResults.map(function(w) {
+      return [
+        dateStr,
+        String(w.name || ''),
+        Number(w.start) || 0,
+        Number(w.end) || 0,
+        Number(w.assigned) || 0,
+        Number(w.actual) || 0,
+        Number(w.done) || 0,
+        Number(w.pending) || 0,
+        parseFloat((Number(w.rate) || 0).toFixed(2))
+      ];
+    });
+    const newLast = sheet.getLastRow();
+    sheet.getRange(newLast + 1, 1, rows.length, headers.length).setValues(rows);
+  }
+  return 'ok';
+}
+
+function getProcessingRateHistory() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(PR_HISTORY_SHEET);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const tz = Session.getScriptTimeZone();
+  return data.slice(1).map(function(row) {
+    const obj = {};
+    hdrs.forEach(function(h, i) {
+      var v = row[i];
+      // Google Sheets가 날짜 문자열을 Date 객체로 읽어오는 경우 YYYY-MM-DD 문자열로 변환
+      if (h === '날짜' && v instanceof Date) {
+        v = Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+      }
+      obj[h] = v;
+    });
+    return obj;
+  });
+}
