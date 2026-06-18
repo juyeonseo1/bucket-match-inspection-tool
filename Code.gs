@@ -384,6 +384,21 @@ function findHeader_(headers, candidates) {
   return -1;
 }
 
+// 셀 값을 'yyyy-MM-dd' 날짜 문자열로 변환
+// Date 객체, Excel 시리얼 넘버(숫자), 날짜 문자열을 모두 처리
+function parseDateValue_(val) {
+  if (val == null || val === '') return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd');
+  }
+  if (typeof val === 'number') {
+    // Excel 시리얼 넘버 → 날짜 (25569 = Excel epoch에서 Unix epoch까지의 일수)
+    const d = new Date((val - 25569) * 86400 * 1000);
+    return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+  }
+  return String(val).slice(0, 10).trim();
+}
+
 // singleHeader 모드 여부: schema.singleHeader === true 이면 Data 시트가 1행 헤더
 function isSingleHeader_(proj) {
   return !!(proj && proj.schema && proj.schema.singleHeader);
@@ -1030,8 +1045,7 @@ function computeWorkerStats_(projectId, startDate, endDate) {
       if (cdIdx >= 0) {
         for (let i = headerCount; i < dv.length; i++) {
           const key = String(i - headerCount + 1); // 1-based
-          const val = dv[i][cdIdx];
-          keyToCollectedDate[key] = val ? String(val).slice(0, 10) : '';
+          keyToCollectedDate[key] = parseDateValue_(dv[i][cdIdx]);
         }
       }
     }
@@ -1200,15 +1214,7 @@ function updateStatsSheet(payload) {
     const proc = procIdx >= 0 ? String(dataRows[i][procIdx] || '').toLowerCase().trim() : '';
 
     // Collected date 추출
-    let dateStr = '';
-    if (cdIdx >= 0) {
-      const raw = dataRows[i][cdIdx];
-      if (raw instanceof Date) {
-        dateStr = Utilities.formatDate(raw, Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd');
-      } else {
-        dateStr = String(raw || '').slice(0, 10).trim();
-      }
-    }
+    let dateStr = cdIdx >= 0 ? parseDateValue_(dataRows[i][cdIdx]) : '';
     if (!dateStr) dateStr = '(미분류)';
 
     if (proc === 'human' || proc === 'system') {
