@@ -288,7 +288,10 @@ function getProjectState(payload) {
         const row = {};
         let hasContent = false;
         dataHeaders.forEach((h, j) => {
-          const v = String(dataValues[i][j] || '');
+          const raw = dataValues[i][j];
+          const v = raw instanceof Date
+            ? Utilities.formatDate(raw, Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd')
+            : String(raw == null ? '' : raw);
           row[h] = v;
           if (v) hasContent = true;
         });
@@ -301,7 +304,12 @@ function getProjectState(payload) {
       dataHeaders = dataValues[0].map(String);
       for (let i = 1; i < dataValues.length; i++) {
         const row = {};
-        dataHeaders.forEach((h, j) => { row[h] = String(dataValues[i][j] || ''); });
+        dataHeaders.forEach((h, j) => {
+          const raw = dataValues[i][j];
+          row[h] = raw instanceof Date
+            ? Utilities.formatDate(raw, Session.getScriptTimeZone() || 'Asia/Seoul', 'yyyy-MM-dd')
+            : String(raw == null ? '' : raw);
+        });
         if (row['상품번호'] || row['C_상품번호']) data.push(row);
       }
     } else {
@@ -1391,6 +1399,10 @@ function updateStatsSheet(payload) {
   dpSh.setColumnWidth(5, 70);   // 일치
   dpSh.setColumnWidth(6, 80);   // 불일치
   dpSh.setColumnWidth(7, 100);  // 정확도
+  // 날짜 컬럼을 yyyy-MM-dd 형식으로 명시 (Google Sheets 자동변환 방지)
+  if (dpData.length > 1) {
+    dpSh.getRange(2, 1, dpData.length - 1, 1).setNumberFormat('yyyy-MM-dd');
+  }
 
   SpreadsheetApp.flush();
   return { ok: true, sheetUrl: 'https://docs.google.com/spreadsheets/d/' + projectSs.getId() };
