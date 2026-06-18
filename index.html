@@ -497,12 +497,27 @@
         <input type="number" id="new-end" placeholder="끝" style="flex:0.7;" min="1" />
         <button id="btn-add-assign" style="flex:0.7;">추가</button>
       </div>
-      <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <input type="number" id="auto-split-start" placeholder="시작행" min="1" style="width:80px; height:32px; font-size:13px;" />
-        <span style="font-size:12px; color:#888780;">~</span>
-        <input type="number" id="auto-split-end" placeholder="끝행" min="1" style="width:80px; height:32px; font-size:13px;" />
-        <button id="btn-auto-split" style="flex:1;">균등 분배</button>
-        <button id="btn-clear-assign" class="danger">할당 초기화</button>
+      <div style="margin-top:12px;">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+          <input type="number" id="auto-split-start" placeholder="시작행" min="1" style="width:80px; height:32px; font-size:13px;" />
+          <span style="font-size:12px; color:#888780;">~</span>
+          <input type="number" id="auto-split-end" placeholder="끝행" min="1" style="width:80px; height:32px; font-size:13px;" />
+        </div>
+        <div style="margin-bottom:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <span style="font-size:11px; color:#888780; text-transform:uppercase; letter-spacing:0.5px;">분배 대상 작업자</span>
+            <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer; color:#5f5e5a;">
+              <input type="checkbox" id="auto-split-select-all" /> 전체 선택
+            </label>
+          </div>
+          <div id="auto-split-workers" style="display:flex; flex-wrap:wrap; gap:6px; padding:8px; background:#f8f7f4; border-radius:6px; border:1px solid #e5e4e0; min-height:36px; align-items:center;">
+            <span style="font-size:12px; color:#888780;">작업자를 먼저 등록해주세요</span>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button id="btn-auto-split" style="flex:1;">균등 분배</button>
+          <button id="btn-clear-assign" class="danger">할당 초기화</button>
+        </div>
       </div>
     </div>
 
@@ -1507,6 +1522,37 @@
       });
     }
     renderReasonsAdmin();
+
+    // 균등 분배 대상 작업자 체크박스
+    const splitWorkersEl = document.getElementById('auto-split-workers');
+    const selectAllCb = document.getElementById('auto-split-select-all');
+    if (workersRegistry.length === 0) {
+      splitWorkersEl.innerHTML = '<span style="font-size:12px; color:#888780;">작업자를 먼저 등록해주세요</span>';
+      selectAllCb.checked = false;
+      selectAllCb.disabled = true;
+    } else {
+      selectAllCb.disabled = false;
+      const prevChecked = new Set(
+        [...splitWorkersEl.querySelectorAll('.split-worker-cb:checked')].map(cb => cb.value)
+      );
+      const useAll = prevChecked.size === 0; // 첫 렌더링이면 전체 선택
+      splitWorkersEl.innerHTML = workersRegistry.map(w =>
+        `<label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;padding:3px 8px;background:#fff;border:1px solid #e5e4e0;border-radius:4px;">
+          <input type="checkbox" class="split-worker-cb" value="${escapeHtml(w)}" ${useAll || prevChecked.has(w) ? 'checked' : ''} />
+          ${escapeHtml(w)}
+        </label>`
+      ).join('');
+      const allCbs = splitWorkersEl.querySelectorAll('.split-worker-cb');
+      const syncSelectAll = () => {
+        const checked = splitWorkersEl.querySelectorAll('.split-worker-cb:checked');
+        selectAllCb.checked = checked.length === allCbs.length;
+        selectAllCb.indeterminate = checked.length > 0 && checked.length < allCbs.length;
+      };
+      syncSelectAll();
+      selectAllCb.onchange = () => allCbs.forEach(cb => cb.checked = selectAllCb.checked);
+      allCbs.forEach(cb => cb.addEventListener('change', syncSelectAll));
+    }
+
     const list = document.getElementById('assignments-list');
     list.innerHTML = '';
     assignments.forEach((a, idx) => {
@@ -1678,17 +1724,19 @@
 
   document.getElementById('btn-auto-split').addEventListener('click', async () => {
     if (!currentProjectId) { toast('프로젝트를 선택해주세요', true); return; }
-    if (workersRegistry.length === 0) { alert('먼저 작업자를 등록해주세요'); return; }
     if (RAW_DATA.length === 0) { alert('먼저 데이터를 업로드해주세요'); return; }
+    const selectedWorkers = [...document.querySelectorAll('#auto-split-workers .split-worker-cb:checked')]
+      .map(cb => cb.value);
+    if (selectedWorkers.length === 0) { alert('분배할 작업자를 1명 이상 선택해주세요'); return; }
     const startVal = parseInt(document.getElementById('auto-split-start').value) || 1;
     const endVal = parseInt(document.getElementById('auto-split-end').value) || RAW_DATA.length;
     if (startVal < 1 || endVal > RAW_DATA.length || startVal > endVal) {
       alert(`올바른 범위를 입력해주세요. (1 ~ ${RAW_DATA.length})`); return;
     }
-    if (!confirm(`${startVal}~${endVal}행 (${endVal - startVal + 1}건)을 ${workersRegistry.length}명에게 균등 분배합니다.\n(기존 할당은 모두 대체됩니다)`)) return;
+    if (!confirm(`${startVal}~${endVal}행 (${endVal - startVal + 1}건)을 ${selectedWorkers.length}명에게 균등 분배합니다.\n(기존 할당은 모두 대체됩니다)`)) return;
     const rangeTotal = endVal - startVal + 1;
-    const per = Math.ceil(rangeTotal / workersRegistry.length);
-    assignments = workersRegistry.map((w, i) => ({
+    const per = Math.ceil(rangeTotal / selectedWorkers.length);
+    assignments = selectedWorkers.map((w, i) => ({
       worker: w,
       start: startVal + i * per,
       end: Math.min(endVal, startVal + (i + 1) * per - 1)
